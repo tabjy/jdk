@@ -397,6 +397,10 @@ Node* AddNode::IdealIL(PhaseGVN* phase, bool can_reshape, BasicType bt) {
 
   // Convert a + a + ... + a into a*n
   if (UseNewCode) {
+//    Compile::current()->dump_igv("AddNode::IdealIL", 2);
+//    Compile::current()->igv_print_method_to_network("AddNode::IdealIL");
+//    printf("AddNode::IdealIL sanity check\n");
+//    Compile::current()->print_ideal_ir("AddNode::IdealIL");
     Node* serial_additions = convert_serial_additions(phase, can_reshape, bt);
     if (serial_additions != nullptr) {
       return serial_additions;
@@ -484,25 +488,36 @@ Node* AddNode::convert_serial_additions(PhaseGVN* phase, bool can_reshape, Basic
     Node* rhs_const = rhs->is_LShift() ? rhs->in(2) : nullptr;
 
     jlong lhs_multiplier = 1;
+    jlong rhs_multiplier = 1;
+
+    // FIXME: refactor
+    // AddNode(LShiftNode(a, CON1), LShiftNode(a, CON2)/a) ... + a
     if (lhs->is_LShift()) { // TODO: refactor
-      Node* con = lhs->in(2);
-      BasicType con_bt = phase->type(con)->basic_type();
+      if (lhs_base != in2 || lhs_base != rhs_base || !lhs_const->is_Con()) {
+        return nullptr;
+      }
+
+      BasicType con_bt = phase->type(lhs_const)->basic_type();
       if (con_bt == T_VOID) { // const could potentially be void type
         return nullptr;
       }
 
-      lhs_multiplier = ((jlong) 1 << con->get_integer_as_long(con_bt));
+      lhs_multiplier = ((jlong) 1 << lhs_const->get_integer_as_long(con_bt));
     }
 
-    jlong rhs_multiplier = 1;
+    // FIXME: refactor
+    // AddNode(LShiftNode(a, CON1)/a, LShiftNode(a, CON2)) ... + a
     if (rhs->is_LShift()) { // TODO: refactor
-      Node* con = rhs->in(2);
-      BasicType con_bt = phase->type(con)->basic_type();
+      if (rhs_base != in2 || rhs_base != lhs_base || !rhs_const->is_Con()) {
+        return nullptr;
+      }
+
+      BasicType con_bt = phase->type(rhs_const)->basic_type();
       if (con_bt == T_VOID) { // const could potentially be void type
         return nullptr;
       }
 
-      rhs_multiplier = ((jlong) 1 << con->get_integer_as_long(con_bt));
+      rhs_multiplier = ((jlong) 1 << rhs_const->get_integer_as_long(con_bt));
     }
 
     multiplier = lhs_multiplier + rhs_multiplier;
