@@ -396,9 +396,11 @@ Node* AddNode::IdealIL(PhaseGVN* phase, bool can_reshape, BasicType bt) {
   }
 
   // Convert a + a + ... + a into a*n
-  Node* serial_additions = convert_serial_additions(phase, can_reshape, bt);
-  if (serial_additions != nullptr) {
-    return serial_additions;
+  if (UseNewCode) {
+    Node* serial_additions = convert_serial_additions(phase, can_reshape, bt);
+    if (serial_additions != nullptr) {
+      return serial_additions;
+    }
   }
 
   return AddNode::Ideal(phase, can_reshape);
