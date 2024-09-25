@@ -396,15 +396,9 @@ Node* AddNode::IdealIL(PhaseGVN* phase, bool can_reshape, BasicType bt) {
   }
 
   // Convert a + a + ... + a into a*n
-  if (UseNewCode) {
-//    Compile::current()->dump_igv("AddNode::IdealIL", 2);
-//    Compile::current()->igv_print_method_to_network("AddNode::IdealIL");
-//    printf("AddNode::IdealIL sanity check\n");
-//    Compile::current()->print_ideal_ir("AddNode::IdealIL");
     Node* serial_additions = convert_serial_additions(phase, can_reshape, bt);
     if (serial_additions != nullptr) {
       return serial_additions;
-    }
   }
 
   return AddNode::Ideal(phase, can_reshape);
