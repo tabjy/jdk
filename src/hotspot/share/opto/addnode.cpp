@@ -560,7 +560,6 @@ Node* AddNode::convert_serial_additions(PhaseGVN* phase, bool can_reshape, Basic
 
 // MulINode::Ideal() optimizes a multiplication to an addition of at most two terms if possible.
 bool AddNode::is_optimized_multiplication() {
-  int op = Opcode();
   Node* lhs = in(1);
   Node* rhs = in(2);
 
@@ -579,18 +578,22 @@ bool AddNode::is_optimized_multiplication() {
     rhs = tmp;
   }
 
-  // AddNode(LShiftNode(a, CON), LShiftNode(a, CON)/a)
+  // AddNode(LShiftNode(a, CON), *)?
   if (!lhs->is_LShift() || !lhs->in(2)->is_Con()) {
     return false;
   }
 
-  if (rhs->is_LShift() && lhs->in(1) != rhs->in(1)) {
-    return false;
+  // AddNode(LShiftNode(a, CON), a)?
+  if (lhs->in(1) == rhs) {
+    return true;
   }
 
-  Node* lhs_base = lhs->in(1);
-  Node* rhs_base = rhs->is_LShift() ? rhs->in(1) : rhs;
-  return lhs_base == rhs_base;
+  // AddNode(LShiftNode(a, CON), LShiftNode(a, CON2))?
+  if (rhs->is_LShift() && lhs->in(1) == rhs->in(2) && rhs->in(2)->is_Con()) {
+    return true;
+  }
+
+  return false;
 }
 
 Node* AddINode::Ideal(PhaseGVN* phase, bool can_reshape) {
