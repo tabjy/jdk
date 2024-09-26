@@ -589,7 +589,7 @@ bool AddNode::is_optimized_multiplication() {
   }
 
   // AddNode(LShiftNode(a, CON), LShiftNode(a, CON2))?
-  if (rhs->is_LShift() && lhs->in(1) == rhs->in(2) && rhs->in(2)->is_Con()) {
+  if (rhs->is_LShift() && lhs->in(1) == rhs->in(1) && rhs->in(2)->is_Con()) {
     return true;
   }
 
