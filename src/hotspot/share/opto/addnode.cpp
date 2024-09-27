@@ -396,9 +396,9 @@ Node* AddNode::IdealIL(PhaseGVN* phase, bool can_reshape, BasicType bt) {
   }
 
   // Convert a + a + ... + a into a*n
-    Node* serial_additions = convert_serial_additions(phase, can_reshape, bt);
-    if (serial_additions != nullptr) {
-      return serial_additions;
+  Node* serial_additions = convert_serial_additions(phase, can_reshape, bt);
+  if (serial_additions != nullptr) {
+    return serial_additions;
   }
 
   return AddNode::Ideal(phase, can_reshape);
@@ -478,43 +478,29 @@ Node* AddNode::convert_serial_additions(PhaseGVN* phase, bool can_reshape, Basic
     Node* lhs_base = lhs->is_LShift() ? lhs->in(1) : lhs;
     Node* rhs_base = rhs->is_LShift() ? rhs->in(1) : rhs;
 
-    Node* lhs_const = lhs->is_LShift() ? lhs->in(2) : nullptr;
-    Node* rhs_const = rhs->is_LShift() ? rhs->in(2) : nullptr;
+    Node* nodes[] = {lhs, rhs};
+    Node* bases[] = {lhs_base, rhs_base};
+    jlong multipliers[] = {1, 1};
 
-    jlong lhs_multiplier = 1;
-    jlong rhs_multiplier = 1;
+    // AddNode(LShiftNode(a, CON1), LShiftNode(a, CON2)/a)
+    // AddNode(LShiftNode(a, CON1)/a, LShiftNode(a, CON2))
+    for (int i = 0; i < 2; i++) {
+      if (nodes[i]->is_LShift()) {
+        Node* con = nodes[i]->in(2);
+        if (bases[i] != in2 || bases[0] != bases[1] || !con->is_Con()) {
+          return nullptr;
+        }
 
-    // FIXME: refactor
-    // AddNode(LShiftNode(a, CON1), LShiftNode(a, CON2)/a) ... + a
-    if (lhs->is_LShift()) { // TODO: refactor
-      if (lhs_base != in2 || lhs_base != rhs_base || !lhs_const->is_Con()) {
-        return nullptr;
+        BasicType con_bt = phase->type(con)->basic_type();
+        if (con_bt == T_VOID) {
+          return nullptr;
+        }
+
+        multipliers[i] = ((jlong) 1 << con->get_integer_as_long(con_bt));
       }
-
-      BasicType con_bt = phase->type(lhs_const)->basic_type();
-      if (con_bt == T_VOID) { // const could potentially be void type
-        return nullptr;
-      }
-
-      lhs_multiplier = ((jlong) 1 << lhs_const->get_integer_as_long(con_bt));
     }
 
-    // FIXME: refactor
-    // AddNode(LShiftNode(a, CON1)/a, LShiftNode(a, CON2)) ... + a
-    if (rhs->is_LShift()) { // TODO: refactor
-      if (rhs_base != in2 || rhs_base != lhs_base || !rhs_const->is_Con()) {
-        return nullptr;
-      }
-
-      BasicType con_bt = phase->type(rhs_const)->basic_type();
-      if (con_bt == T_VOID) { // const could potentially be void type
-        return nullptr;
-      }
-
-      rhs_multiplier = ((jlong) 1 << rhs_const->get_integer_as_long(con_bt));
-    }
-
-    multiplier = lhs_multiplier + rhs_multiplier;
+    multiplier = multipliers[0] + multipliers[1];
     matched = true;
   }
 
@@ -535,9 +521,9 @@ Node* AddNode::convert_serial_additions(PhaseGVN* phase, bool can_reshape, Basic
       return nullptr;
     }
 
+    // We can't simply return the lshift node even if ((a << CON) - a) + a cancels out. Ideal() must return a new node.
     multiplier = ((jlong) 1 << con->get_integer_as_long(con_bt)) - 1;
     matched = true;
-//    return lshift; // ((a << CON) - a) + a cancel out to a << CON
   }
 
   if (!matched) {
