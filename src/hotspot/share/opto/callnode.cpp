@@ -2301,3 +2301,94 @@ bool CallNode::may_modify_arraycopy_helper(const TypeOopPtr* dest_t, const TypeO
 
   return true;
 }
+
+Node* CallLeafNoFPNode::Ideal(PhaseGVN* phase, bool can_reshape) {
+
+  if (strcmp(this->_name, "unsafe_setmemory") != 0) {
+    return nullptr;
+  }
+
+  Node* this_control = this->control();
+  Node* this_memory = this->memory();
+
+  if (this_control->Opcode() != Op_Proj) {
+    return nullptr;
+  }
+
+  Node* last = this_control->in(0);
+  if (last->Opcode() != Op_CallLeafNoFP) {
+    return nullptr;
+  }
+
+  CallLeafNode* that = (CallLeafNode*) last;
+
+  if (strcmp(that->_name, "unsafe_setmemory") != 0) {
+    return nullptr;
+  }
+
+//    StoreB (crtl, mem, addr, 1) // set volatile field
+//    CallLeafNoFPNode (...)
+//    StoreB (crtl, mem, addr, 0) // reset volatile field, optimized away for the first call if two calls happens consecutively
+
+//    if (this_memory->Opcode() != Op_StoreB) {
+//      return nullptr;
+//    }
+  assert(this_memory->Opcode() == Op_StoreB, "expects memory to be a StoreB node");
+
+  if (this_memory->in(0) != this_control) {
+    return nullptr;
+  }
+
+  if (this_memory->in(3)->find_int_con(-1) != 1) {
+    return nullptr;
+  }
+
+  // TODO: also check addr to be the same for two StoreB nodes
+
+  Node* memory_projection = this_memory->in(1);
+  if (memory_projection->Opcode() != Op_Proj) {
+    return nullptr;
+  }
+  if (memory_projection->in(0) != that) {
+    return nullptr;
+  }
+
+  //  phase->type(sub)->find_long
+
+  // full elimination of the first call
+  if (
+      this->in(1) == that->in(1) // IO
+          && this->in(3) == that->in(3) // rawprt, redundant check?
+          && this->in(4) == that->in(4) // return_addr, okay to be different?
+          && this->in(5) == that->in(5) // base+offset
+          && (
+              this->in(6) == that->in(6) // length
+                  || (
+                      this->in(6)->find_long_con(-1) >= this->in(6)->find_long_con(-1)
+                          && this->in(6)->find_long_con(-1) != -1
+                          && that->in(6)->find_long_con(-1) != -1// this.length >= that.length
+                  )
+          )
+      ) {
+    assert(this->in(7) == that->in(7), "expects same node for the unused slot");
+
+    this->set_req(TypeFunc::Control, that->in(TypeFunc::Control));
+    this->set_req(TypeFunc::Memory, that->in(TypeFunc::Memory));
+
+    return nullptr; // removed the first call, only inputs to current one is updated
+  }
+
+  // TODO: partial elimination of the first call, need to figure out the current memory segment API actually has cases
+  // for partial elimination opportunities
+//    if (
+//        this->in(1) == that->in(1) // IO
+//            && this->in(3) == that->in(3) // rawprt, redundant check?
+//            && this->in(4) == that->in(4) // return_addr, okay to be different?
+//            && this->in(5) == that->in(5) // base+offset
+//            && this->in(6) == that->in(6) // length
+//        ) {
+//
+//    }
+
+  return nullptr;
+}

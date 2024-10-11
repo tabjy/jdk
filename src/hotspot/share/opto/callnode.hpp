@@ -928,6 +928,7 @@ public:
     init_class_id(Class_CallLeafNoFP);
   }
   virtual int   Opcode() const;
+  Node* Ideal(PhaseGVN* phase, bool can_reshape);
 };
 
 //------------------------------CallLeafVectorNode-------------------------------
