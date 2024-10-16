@@ -2372,6 +2372,7 @@ Node* CallLeafNoFPNode::Ideal(PhaseGVN* phase, bool can_reshape) {
       ) {
     assert(this->in(7) == that->in(7), "expects same node for the unused slot");
 
+    // TODO: return a new node than modifying reqs
     this->set_req(TypeFunc::Control, that->in(TypeFunc::Control));
     this->set_req(TypeFunc::Memory, that->in(TypeFunc::Memory));
 
