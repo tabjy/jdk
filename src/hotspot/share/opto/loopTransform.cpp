@@ -120,24 +120,24 @@ void IdealLoopTree::compute_trip_count(PhaseIdealLoop* phase) {
   Node* init_n = cl->init_trip();
   Node* limit_n = cl->limit();
   if (init_n != nullptr && limit_n != nullptr) {
-    // Use longs to avoid integer overflow.
-    int stride_con = cl->stride_con();
-    const TypeInt* init_type = phase->_igvn.type(init_n)->is_int();
-    const TypeInt* limit_type = phase->_igvn.type(limit_n)->is_int();
-    jlong init_con = (stride_con > 0) ? init_type->_lo : init_type->_hi;
-    jlong limit_con = (stride_con > 0) ? limit_type->_hi : limit_type->_lo;
-    int stride_m = stride_con - (stride_con > 0 ? 1 : -1);
-    jlong trip_count = (limit_con - init_con + stride_m)/stride_con;
+    // Use longs even for int counted loops to avoid integer overflow.
+    jlong stride_con = cl->stride_con();
+    const TypeInteger* init_type = phase->_igvn.type(init_n)->is_integer(cl->bt());
+    const TypeInteger* limit_type = phase->_igvn.type(limit_n)->is_integer(cl->bt());
+    jlong init_con = (stride_con > 0) ? init_type->lo_as_long() : init_type->hi_as_long();
+    jlong limit_con = (stride_con > 0) ? limit_type->hi_as_long() : limit_type->lo_as_long();
+    jlong stride_m = stride_con - (stride_con > 0 ? 1 : -1);
+    jlong trip_count = (limit_con - init_con + stride_m) / stride_con;
     // The loop body is always executed at least once even if init >= limit (for stride_con > 0) or
     // init <= limit (for stride_con < 0).
     trip_count = MAX2(trip_count, (jlong)1);
     if (trip_count < (jlong)max_juint) {
       if (init_n->is_Con() && limit_n->is_Con()) {
         // Set exact trip count.
-        cl->set_exact_trip_count((uint)trip_count);
+        cl->set_exact_trip_count((uint)trip_count); // FIXME: consider long counted loops
       } else if (cl->unrolled_count() == 1) {
         // Set maximum trip count before unrolling.
-        cl->set_trip_count((uint)trip_count);
+        cl->set_trip_count((uint)trip_count); // FIXME: consider long counted loops
       }
     }
   }

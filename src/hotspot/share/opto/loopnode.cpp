@@ -2381,8 +2381,8 @@ Node* PhaseIdealLoop::exact_limit( IdealLoopTree *loop ) {
   CountedLoopNode *cl = loop->_head->as_CountedLoop();
   assert(cl->is_valid_counted_loop(cl->bt()), "");
 
-  if (cl->stride_con() == 1 || // FIXME: long type for LongCountedLoops
-      cl->stride_con() == -1 || // FIXME: long type for LongCountedLoops
+  if (cl->stride_con() == 1 ||
+      cl->stride_con() == -1 ||
       cl->limit()->Opcode() == Op_LoopLimit) {
     // Old code has exact limit (it could be incorrect in case of int overflow).
     // Loop limit is exact with stride == 1. And loop may already have exact limit.
@@ -2396,16 +2396,18 @@ Node* PhaseIdealLoop::exact_limit( IdealLoopTree *loop ) {
   if (cl->has_exact_trip_count()) {
     // Simple case: loop has constant boundaries.
     // Use jlongs to avoid integer overflow.
-    int stride_con = cl->stride_con(); // FIXME: long type for LongCountedLoops
+    jlong stride_con = cl->stride_con(); // FIXME: long type for LongCountedLoops
     jlong  init_con = cl->init_trip()->get_int();
     jlong limit_con = cl->limit()->get_int();
     julong trip_cnt = cl->trip_count();
     jlong final_con = init_con + trip_cnt*stride_con;
-    int final_int = (int)final_con;
+
+    BasicType con_bt = cl->bt();
+    jint final_int = (jint) final_con;
     // The final value should be in integer range since the loop
     // is counted and the limit was checked for overflow.
-    assert(final_con == (jlong)final_int, "final value should be integer");
-    limit = _igvn.intcon(final_int);
+    assert(con_bt != T_INT || final_con == (jlong) final_int, "final value should be integer");
+    limit = _igvn.integercon(con_bt == T_INT ? final_int : final_con, cl->bt());
   } else {
     // Create new LoopLimit node to get exact limit (final iv value).
     limit = new LoopLimitNode(C, cl->init_trip(), cl->limit(), cl->stride());
@@ -2516,7 +2518,7 @@ Node *CountedLoopNode::Ideal(PhaseGVN *phase, bool can_reshape) {
 void CountedLoopNode::dump_spec(outputStream *st) const {
   LoopNode::dump_spec(st);
   if (stride_is_con()) {
-    st->print("stride: %d ",stride_con());
+    st->print("stride: %ld ", stride_con());
   }
   if (is_pre_loop ()) st->print("pre of N%d" , _main_idx);
   if (is_main_loop()) st->print("main of N%d", _idx);
@@ -2837,12 +2839,6 @@ Node* CountedLoopNode::skip_assertion_predicates_with_halt() {
     return assertion_predicates.entry();
   }
   return ctrl;
-}
-
-
-int CountedLoopNode::stride_con() const { // FIXME: long type for LongCountedLoops
-  CountedLoopEndNode* cle = loopexit_or_null();
-  return cle != nullptr ? cle->stride_con() : 0;
 }
 
 BaseCountedLoopNode* BaseCountedLoopNode::make(Node* entry, Node* backedge, BasicType bt) {

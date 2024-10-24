@@ -249,7 +249,6 @@ public:
 
   CountedLoopEndNode* loopexit_or_null() const { return (CountedLoopEndNode*) BaseCountedLoopNode::loopexit_or_null(); }
   CountedLoopEndNode* loopexit() const { return (CountedLoopEndNode*) BaseCountedLoopNode::loopexit(); }
-  int   stride_con() const;
 
   // Match increment with optional truncation
   static Node*
@@ -292,7 +291,7 @@ public:
   void set_post_loop (CountedLoopNode *main) { assert(is_normal_loop(),""); _loop_flags |= Post; _main_idx = main->_idx; }
   void set_normal_loop(                    ) { _loop_flags &= ~PreMainPostFlagsMask; }
 
-  void set_trip_count(uint tc) { _trip_count = tc; }
+  void set_trip_count(uint tc) { _trip_count = tc; } // FIXME: consider long loops
   uint trip_count()            { return _trip_count; }
 
   bool has_exact_trip_count() const { return (_loop_flags & HasExactTripCount) != 0; }
@@ -433,10 +432,10 @@ public:
 #endif
 };
 
-class LongCountedLoopEndNode : public BaseCountedLoopEndNode {
+class LongCountedLoopEndNode : public CountedLoopEndNode {
 public:
   LongCountedLoopEndNode(Node *control, Node *test, float prob, float cnt)
-    : BaseCountedLoopEndNode(control, test, prob, cnt) {
+    : CountedLoopEndNode(control, test, prob, cnt) {
     init_class_id(Class_LongCountedLoopEnd);
   }
 
