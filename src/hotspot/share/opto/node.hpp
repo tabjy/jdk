@@ -681,7 +681,7 @@ public:
         DEFINE_CLASS_ID(If,          MultiBranch, 1)
           DEFINE_CLASS_ID(BaseCountedLoopEnd,     If, 0)
             DEFINE_CLASS_ID(CountedLoopEnd,       BaseCountedLoopEnd, 0)
-            DEFINE_CLASS_ID(LongCountedLoopEnd,   BaseCountedLoopEnd, 1)
+              DEFINE_CLASS_ID(LongCountedLoopEnd,   CountedLoopEnd,     0)
           DEFINE_CLASS_ID(RangeCheck,             If, 1)
           DEFINE_CLASS_ID(OuterStripMinedLoopEnd, If, 2)
           DEFINE_CLASS_ID(ParsePredicate,         If, 3)
@@ -776,7 +776,7 @@ public:
         DEFINE_CLASS_ID(Root,                Loop, 0)
         DEFINE_CLASS_ID(BaseCountedLoop,     Loop, 1)
           DEFINE_CLASS_ID(CountedLoop,       BaseCountedLoop, 0)
-          DEFINE_CLASS_ID(LongCountedLoop,   BaseCountedLoop, 1)
+            DEFINE_CLASS_ID(LongCountedLoop,   CountedLoop,     0)
         DEFINE_CLASS_ID(OuterStripMinedLoop, Loop, 2)
 
     DEFINE_CLASS_ID(Sub,   Node, 6)

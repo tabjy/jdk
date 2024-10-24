@@ -2251,8 +2251,7 @@ bool PhaseIdealLoop::is_counted_loop(Node* x, IdealLoopTree*&loop, BasicType iv_
   lazy_replace( iff, le ); // fix 'get_ctrl'
 
   Node* entry_control = init_control;
-  bool strip_mine_loop = iv_bt == T_INT &&
-                         loop->_child == nullptr &&
+  bool strip_mine_loop = loop->_child == nullptr &&
                          sfpt != nullptr &&
                          !loop->_has_call &&
                          is_deleteable_safept(sfpt);
@@ -2278,7 +2277,7 @@ bool PhaseIdealLoop::is_counted_loop(Node* x, IdealLoopTree*&loop, BasicType iv_
   lazy_replace( x, l );
   set_idom(l, entry_control, dom_depth(entry_control) + 1);
 
-  if (iv_bt == T_INT && (LoopStripMiningIter == 0 || strip_mine_loop)) {
+  if (LoopStripMiningIter == 0 || strip_mine_loop) {
     // Check for immediately preceding SafePoint and remove
     if (sfpt != nullptr && (strip_mine_loop || is_deleteable_safept(sfpt))) {
       if (strip_mine_loop) {
@@ -2380,10 +2379,10 @@ bool PhaseIdealLoop::has_dominating_loop_limit_check(Node* init_trip, Node* limi
 Node* PhaseIdealLoop::exact_limit( IdealLoopTree *loop ) {
   assert(loop->_head->is_CountedLoop(), "");
   CountedLoopNode *cl = loop->_head->as_CountedLoop();
-  assert(cl->is_valid_counted_loop(T_INT), "");
+  assert(cl->is_valid_counted_loop(cl->bt()), "");
 
-  if (cl->stride_con() == 1 ||
-      cl->stride_con() == -1 ||
+  if (cl->stride_con() == 1 || // FIXME: long type for LongCountedLoops
+      cl->stride_con() == -1 || // FIXME: long type for LongCountedLoops
       cl->limit()->Opcode() == Op_LoopLimit) {
     // Old code has exact limit (it could be incorrect in case of int overflow).
     // Loop limit is exact with stride == 1. And loop may already have exact limit.
@@ -2397,7 +2396,7 @@ Node* PhaseIdealLoop::exact_limit( IdealLoopTree *loop ) {
   if (cl->has_exact_trip_count()) {
     // Simple case: loop has constant boundaries.
     // Use jlongs to avoid integer overflow.
-    int stride_con = cl->stride_con();
+    int stride_con = cl->stride_con(); // FIXME: long type for LongCountedLoops
     jlong  init_con = cl->init_trip()->get_int();
     jlong limit_con = cl->limit()->get_int();
     julong trip_cnt = cl->trip_count();
@@ -2431,7 +2430,7 @@ void LoopNode::verify_strip_mined(int expect_skeleton) const {
   const OuterStripMinedLoopNode* outer = nullptr;
   const CountedLoopNode* inner = nullptr;
   if (is_strip_mined()) {
-    if (!is_valid_counted_loop(T_INT)) {
+    if (!is_valid_counted_loop(T_INT) && !is_valid_counted_loop(T_LONG)) {
       return; // Skip malformed counted loop
     }
     assert(is_CountedLoop(), "no Loop should be marked strip mined");
@@ -2440,7 +2439,7 @@ void LoopNode::verify_strip_mined(int expect_skeleton) const {
   } else if (is_OuterStripMinedLoop()) {
     outer = this->as_OuterStripMinedLoop();
     inner = outer->unique_ctrl_out()->as_CountedLoop();
-    assert(inner->is_valid_counted_loop(T_INT) && inner->is_strip_mined(), "OuterStripMinedLoop should have been removed");
+    assert(inner->is_valid_counted_loop(inner->bt()) && inner->is_strip_mined(), "OuterStripMinedLoop should have been removed");
     assert(!is_strip_mined(), "outer loop shouldn't be marked strip mined");
   }
   if (inner != nullptr || outer != nullptr) {
@@ -2841,7 +2840,7 @@ Node* CountedLoopNode::skip_assertion_predicates_with_halt() {
 }
 
 
-int CountedLoopNode::stride_con() const {
+int CountedLoopNode::stride_con() const { // FIXME: long type for LongCountedLoops
   CountedLoopEndNode* cle = loopexit_or_null();
   return cle != nullptr ? cle->stride_con() : 0;
 }
@@ -3008,8 +3007,8 @@ void OuterStripMinedLoopNode::adjust_strip_mined_loop(PhaseIterGVN* igvn) {
     return;
   }
   jlong short_scaled_iters = LoopStripMiningIterShortLoop * ABS(stride);
-  const TypeInt* inner_iv_t = igvn->type(inner_iv_phi)->is_int();
-  jlong iter_estimate = (jlong)inner_iv_t->_hi - (jlong)inner_iv_t->_lo;
+  const TypeInteger* inner_iv_t = igvn->type(inner_iv_phi)->is_integer(inner_cl->bt());
+  jlong iter_estimate = (jlong)inner_iv_t->hi_as_long() - (jlong)inner_iv_t->lo_as_long();
   assert(iter_estimate > 0, "broken");
   if (iter_estimate <= short_scaled_iters) {
     // Remove outer loop and safepoint: loop executes less than LoopStripMiningIterShortLoop
@@ -3987,9 +3986,9 @@ bool PhaseIdealLoop::is_deleteable_safept(Node* sfpt) {
 //     long iv2 = ((long) iv * stride_con2 / stride_con) + (init2 - ((long) init * stride_con2 / stride_con))
 //
 void PhaseIdealLoop::replace_parallel_iv(IdealLoopTree *loop) {
-  assert(loop->_head->is_CountedLoop(), "");
-  CountedLoopNode *cl = loop->_head->as_CountedLoop();
-  if (!cl->is_valid_counted_loop(T_INT)) {
+  assert(loop->_head->is_CountedLoop() || loop->_head->is_LongCountedLoop(), "");
+  CountedLoopNode* cl = loop->_head->as_CountedLoop();
+  if (!cl->is_valid_counted_loop(cl->bt())) {
     return;         // skip malformed counted loop
   }
   Node *incr = cl->incr();
@@ -4153,8 +4152,8 @@ void IdealLoopTree::counted_loop( PhaseIdealLoop *phase ) {
 
   IdealLoopTree* loop = this;
   if (_head->is_CountedLoop() ||
-      phase->is_counted_loop(_head, loop, T_INT)) {
-
+      phase->is_counted_loop(_head, loop, T_INT) ||
+      phase->is_counted_loop(_head, loop, T_LONG)) {
     if (LoopStripMiningIter == 0 || _head->as_CountedLoop()->is_strip_mined()) {
       // Indicate we do not need a safepoint here
       _has_sfpt = 1;
@@ -4166,9 +4165,6 @@ void IdealLoopTree::counted_loop( PhaseIdealLoop *phase ) {
 
     // Look for induction variables
     phase->replace_parallel_iv(this);
-  } else if (_head->is_LongCountedLoop() ||
-             phase->is_counted_loop(_head, loop, T_LONG)) {
-    remove_safepoints(phase, true);
   } else {
     assert(!_head->is_Loop() || !_head->as_Loop()->is_loop_nest_inner_loop(), "transformation to counted loop should not fail");
     if (_parent != nullptr && !_irreducible) {
@@ -4884,8 +4880,7 @@ void PhaseIdealLoop::build_and_optimize() {
       // on just their loop-phi's for this pass of loop opts
       if (SplitIfBlocks && do_split_ifs &&
           head->as_BaseCountedLoop()->is_valid_counted_loop(head->as_BaseCountedLoop()->bt()) &&
-          (lpt->policy_range_check(this, true, T_LONG) ||
-           (head->is_CountedLoop() && lpt->policy_range_check(this, true, T_INT)))) {
+          (lpt->policy_range_check(this, true, head->as_BaseCountedLoop()->bt()))) {
         lpt->_rce_candidate = 1; // = true
       }
     }

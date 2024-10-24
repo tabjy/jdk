@@ -3304,13 +3304,13 @@ bool IdealLoopTree::do_remove_empty_loop(PhaseIdealLoop *phase) {
   bool needs_guard = !cl->is_main_loop() && !cl->is_post_loop();
   if (needs_guard) {
     // Skip guard if values not overlap.
-    const TypeInt* init_t = phase->_igvn.type(cl->init_trip())->is_int();
-    const TypeInt* limit_t = phase->_igvn.type(cl->limit())->is_int();
+    const TypeInteger* init_t = phase->_igvn.type(cl->init_trip())->is_integer(cl->bt());
+    const TypeInteger* limit_t = phase->_igvn.type(cl->limit())->is_integer(cl->bt());
     int  stride_con = cl->stride_con();
     if (stride_con > 0) {
-      needs_guard = (init_t->_hi >= limit_t->_lo);
+      needs_guard = (init_t->hi_as_long() >= limit_t->lo_as_long());
     } else {
-      needs_guard = (init_t->_lo <= limit_t->_hi);
+      needs_guard = (init_t->lo_as_long() <= limit_t->hi_as_long());
     }
   }
   if (needs_guard) {
@@ -3370,10 +3370,10 @@ bool IdealLoopTree::do_remove_empty_loop(PhaseIdealLoop *phase) {
   Node* cast_ii = ConstraintCastNode::make_cast_for_basic_type(
       cl->in(LoopNode::EntryControl), exact_limit,
       phase->_igvn.type(exact_limit),
-      ConstraintCastNode::UnconditionalDependency, T_INT);
+      ConstraintCastNode::UnconditionalDependency, cl->bt());
   phase->register_new_node(cast_ii, cl->in(LoopNode::EntryControl));
 
-  Node* final_iv = new SubINode(cast_ii, cl->stride());
+  Node* final_iv = SubNode::make(cast_ii, cl->stride(), cl->bt());
   phase->register_new_node(final_iv, cl->in(LoopNode::EntryControl));
   phase->_igvn.replace_node(phi, final_iv);
 
@@ -3388,7 +3388,7 @@ bool IdealLoopTree::do_remove_empty_loop(PhaseIdealLoop *phase) {
 
 bool IdealLoopTree::empty_loop_candidate(PhaseIdealLoop* phase) const {
   CountedLoopNode *cl = _head->as_CountedLoop();
-  if (!cl->is_valid_counted_loop(T_INT)) {
+  if (!cl->is_valid_counted_loop(cl->bt())) {
     return false;   // Malformed loop
   }
   if (!phase->is_member(this, phase->get_ctrl(cl->loopexit()->in(CountedLoopEndNode::TestValue)))) {

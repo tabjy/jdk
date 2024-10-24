@@ -336,10 +336,11 @@ public:
 #endif
 };
 
-class LongCountedLoopNode : public BaseCountedLoopNode {
+// A long counted loop isn't exactly an (int) counted loop, but we extend from CountedLoopNode to reuse some logics.
+class LongCountedLoopNode : public CountedLoopNode {
 public:
   LongCountedLoopNode(Node *entry, Node *backedge)
-    : BaseCountedLoopNode(entry, backedge) {
+    : CountedLoopNode(entry, backedge) {
     init_class_id(Class_LongCountedLoop);
   }
 
