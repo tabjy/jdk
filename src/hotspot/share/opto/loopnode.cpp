@@ -2518,7 +2518,7 @@ Node *CountedLoopNode::Ideal(PhaseGVN *phase, bool can_reshape) {
 void CountedLoopNode::dump_spec(outputStream *st) const {
   LoopNode::dump_spec(st);
   if (stride_is_con()) {
-    st->print("stride: %ld ", stride_con());
+    st->print("stride: %lld", (long long) stride_con());
   }
   if (is_pre_loop ()) st->print("pre of N%d" , _main_idx);
   if (is_main_loop()) st->print("main of N%d", _idx);
