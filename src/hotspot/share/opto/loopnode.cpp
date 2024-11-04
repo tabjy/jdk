@@ -1358,7 +1358,7 @@ void PhaseIdealLoop::transform_long_range_checks(int stride_con, const Node_List
     Node* Q_min = Q_first;
 
     // Compute the exact ending value B_2 (which is really A_2 if S < 0)
-    Node* B_2 = new LoopLimitNode(this->C, int_zero, inner_iters_actual_int, int_stride);
+    Node* B_2 = new LoopLimitNode(this->C, int_zero, inner_iters_actual_int, int_stride); // TODO: long loops?
     register_new_node(B_2, entry_control);
     B_2 = new SubINode(B_2, int_stride);
     register_new_node(B_2, entry_control);
@@ -2393,7 +2393,7 @@ Node* PhaseIdealLoop::exact_limit( IdealLoopTree *loop ) {
   BoolTest::mask bt = cl->loopexit()->test_trip();
   assert(bt == BoolTest::lt || bt == BoolTest::gt, "canonical test is expected");
 #endif
-  if (cl->has_exact_trip_count()) {
+  if (cl->has_exact_trip_count()) { // TODO: implement exact trip count for long counted loops
     // Simple case: loop has constant boundaries.
     // Use jlongs to avoid integer overflow.
     jlong stride_con = cl->stride_con(); // FIXME: long type for LongCountedLoops
@@ -2410,7 +2410,8 @@ Node* PhaseIdealLoop::exact_limit( IdealLoopTree *loop ) {
     limit = _igvn.integercon(con_bt == T_INT ? final_int : final_con, cl->bt());
   } else {
     // Create new LoopLimit node to get exact limit (final iv value).
-    limit = new LoopLimitNode(C, cl->init_trip(), cl->limit(), cl->stride());
+//    limit = new LoopLimitNode(C, cl->init_trip(), cl->limit(), cl->stride());
+    limit = LoopLimitNode::make(C, cl->init_trip(), cl->limit(), cl->stride(), cl->bt());
     register_new_node(limit, cl->in(LoopNode::EntryControl));
   }
   assert(limit != nullptr, "sanity");
@@ -2543,7 +2544,9 @@ BaseCountedLoopEndNode* BaseCountedLoopEndNode::make(Node* control, Node* test, 
 
 //=============================================================================
 //------------------------------Value-----------------------------------------
-const Type* LoopLimitNode::Value(PhaseGVN* phase) const {
+const Type* LoopLimitNode::ValueIL(PhaseGVN* phase, BasicType bt) const {
+  assert(bt == T_INT || bt == T_LONG, "unsupported");
+
   const Type* init_t   = phase->type(in(Init));
   const Type* limit_t  = phase->type(in(Limit));
   const Type* stride_t = phase->type(in(Stride));
@@ -2552,42 +2555,48 @@ const Type* LoopLimitNode::Value(PhaseGVN* phase) const {
   if (limit_t  == Type::TOP) return Type::TOP;
   if (stride_t == Type::TOP) return Type::TOP;
 
-  int stride_con = stride_t->is_int()->get_con();
-  if (stride_con == 1)
-    return bottom_type();  // Identity
+  jlong stride_con = stride_t->is_integer(bt)->get_con_as_long(bt);
+  if (stride_con == 1) {
+    return bottom_type(); // Identify
+  }
 
-  if (init_t->is_int()->is_con() && limit_t->is_int()->is_con()) {
+  if (init_t->is_integer(bt)->is_con() && limit_t->is_integer(bt)->is_con()) {
     // Use jlongs to avoid integer overflow.
     jlong init_con   =  init_t->is_int()->get_con();
     jlong limit_con  = limit_t->is_int()->get_con();
-    int  stride_m   = stride_con - (stride_con > 0 ? 1 : -1);
-    jlong trip_count = (limit_con - init_con + stride_m)/stride_con;
-    jlong final_con  = init_con + stride_con*trip_count;
-    int final_int = (int)final_con;
+    jlong stride_m = stride_con - (stride_con > 0 ? 1 : -1); // TODO: need to handle overflow for ints?
+    jlong trip_count = (limit_con - init_con + stride_m) / stride_con;
+    jlong final_con  = init_con + stride_con * trip_count;
+    jint final_int = (jint) final_con;
+
+    // TODO: make sure the assertion for int type is correct
     // The final value should be in integer range since the loop
     // is counted and the limit was checked for overflow.
     // Assert checks for overflow only if all input nodes are ConINodes, as during CCP
     // there might be a temporary overflow from PhiNodes see JDK-8309266
-    assert((in(Init)->is_ConI() && in(Limit)->is_ConI() && in(Stride)->is_ConI()) ? final_con == (jlong)final_int : true, "final value should be integer");
-    if (final_con == (jlong)final_int) {
+    assert(bt == T_LONG || final_con == (jlong) final_int, "final value should be integer");
+
+    if (bt == T_INT) {
       return TypeInt::make(final_int);
     } else {
-      return bottom_type();
+      return TypeLong::make(final_con);
     }
   }
 
-  return bottom_type(); // TypeInt::INT
+  return bottom_type();
 }
 
 //------------------------------Ideal------------------------------------------
 // Return a node which is more "ideal" than the current node.
-Node *LoopLimitNode::Ideal(PhaseGVN *phase, bool can_reshape) {
+Node *LoopLimitNode::IdealIL(PhaseGVN *phase, bool can_reshape, BasicType bt) {
+  assert(bt == T_INT || bt == T_LONG, "unsupported");
+
   if (phase->type(in(Init))   == Type::TOP ||
       phase->type(in(Limit))  == Type::TOP ||
       phase->type(in(Stride)) == Type::TOP)
     return nullptr;  // Dead
 
-  int stride_con = phase->type(in(Stride))->is_int()->get_con();
+  jlong stride_con = phase->type(in(Stride))->is_integer(bt)->get_con_as_long(bt);
   if (stride_con == 1)
     return nullptr;  // Identity
 
@@ -2600,40 +2609,43 @@ Node *LoopLimitNode::Ideal(PhaseGVN *phase, bool can_reshape) {
     return nullptr;
   }
 
-  const TypeInt* init_t  = phase->type(in(Init) )->is_int();
-  const TypeInt* limit_t = phase->type(in(Limit))->is_int();
+  const TypeInteger* init_t = phase->type(in(Init))->is_integer(bt);
+  const TypeInteger* limit_t = phase->type(in(Limit))->is_integer(bt);
+
   jlong stride_p;
   jlong lim, ini;
   julong max;
   if (stride_con > 0) {
     stride_p = stride_con;
-    lim = limit_t->_hi;
-    ini = init_t->_lo;
+    lim = limit_t->hi_as_long();
+    ini = init_t->lo_as_long();
     max = (julong)max_jint;
   } else {
     stride_p = -(jlong)stride_con;
-    lim = init_t->_hi;
-    ini = limit_t->_lo;
-    max = (julong)(juint)min_jint; // double cast to get 0x0000000080000000, not 0xffffffff80000000
+    lim = init_t->hi_as_long();
+    ini = limit_t->lo_as_long();
+    max = (julong)(juint)min_jint; // double cast to get 0x0000000080000000, not 0xffffffff80000000 // TODO: for long type
   }
   julong range = lim - ini + stride_p;
   if (range <= max) {
     // Convert to integer expression if it is not overflow.
-    Node* stride_m = phase->intcon(stride_con - (stride_con > 0 ? 1 : -1));
-    Node *range = phase->transform(new SubINode(in(Limit), in(Init)));
-    Node *bias  = phase->transform(new AddINode(range, stride_m));
-    Node *trip  = phase->transform(new DivINode(nullptr, bias, in(Stride)));
-    Node *span  = phase->transform(new MulINode(trip, in(Stride)));
-    return new AddINode(span, in(Init)); // exact limit
+    Node* stride_m = phase->integercon(stride_con - (stride_con > 0 ? 1 : -1), bt);
+    Node* range = phase->transform(SubNode::make(in(Limit), in(Init), bt));
+    Node *bias  = phase->transform(AddNode::make(range, stride_m, bt));
+    Node *trip  = phase->transform(bt == T_INT
+                                        ? (Node*) new DivINode(nullptr, bias, in(Stride))
+                                        : (Node*) new DivLNode(nullptr, bias, in(Stride)));
+    Node *span  = phase->transform(MulNode::make(trip, in(Stride), bt));
+    return AddNode::make(span, in(Init), bt); // exact limit
   }
 
   if (is_power_of_2(stride_p) ||                // divisor is 2^n
-      !Matcher::has_match_rule(Op_LoopLimit)) { // or no specialized Mach node?
+      !Matcher::has_match_rule(Op_LoopLimit)) { // or no specialized Mach node? // TODO: long typed??????
     // Convert to long expression to avoid integer overflow
     // and let igvn optimizer convert this division.
     //
-    Node*   init   = phase->transform( new ConvI2LNode(in(Init)));
-    Node*  limit   = phase->transform( new ConvI2LNode(in(Limit)));
+    Node*   init   = bt == T_INT ? phase->transform( new ConvI2LNode(in(Init))) : in(Init);
+    Node*  limit   = bt == T_INT ? phase->transform( new ConvI2LNode(in(Limit))) : in (Limit);
     Node* stride   = phase->longcon(stride_con);
     Node* stride_m = phase->longcon(stride_con - (stride_con > 0 ? 1 : -1));
 
@@ -2655,8 +2667,11 @@ Node *LoopLimitNode::Ideal(PhaseGVN *phase, bool can_reshape) {
       span = phase->transform(new MulLNode(trip, stride));
     }
     // Convert back to int
-    Node *span_int = phase->transform(new ConvL2INode(span));
-    return new AddINode(span_int, in(Init)); // exact limit
+    if (bt == T_INT) {
+      span = phase->transform(new ConvL2INode(span));
+    }
+
+    return AddNode::make(span, in(Init), bt); // exact limit
   }
 
   return nullptr;    // No progress
@@ -2664,11 +2679,21 @@ Node *LoopLimitNode::Ideal(PhaseGVN *phase, bool can_reshape) {
 
 //------------------------------Identity---------------------------------------
 // If stride == 1 return limit node.
-Node* LoopLimitNode::Identity(PhaseGVN* phase) {
-  int stride_con = phase->type(in(Stride))->is_int()->get_con();
+Node* LoopLimitNode::IdentityIL(PhaseGVN* phase, BasicType bt) {
+  jlong stride_con = phase->type(in(Stride))->is_integer(bt)->get_con_as_long(bt);
   if (stride_con == 1 || stride_con == -1)
     return in(Limit);
   return this;
+}
+
+Node* LoopLimitNode::make(Compile* C, Node* init, Node* limit, Node* stride, BasicType bt) {
+  assert(bt == T_INT || bt == T_LONG, "must be an int or a long");
+
+  if (bt == T_INT) {
+    return new LoopLimitNode(C, init, limit, stride);
+  } else {
+    return new LongLoopLimitNode(C, init, limit, stride);
+  }
 }
 
 //=============================================================================

@@ -747,7 +747,7 @@ private:
     // this function may be called twice for a node so we can only remove it
     // if it's still existing.
     _macro_nodes.remove_if_existing(n);
-    // Remove from coarsened locks list if present
+    // Remove from coarsened locks list if pre
     if (coarsened_count() > 0) {
       remove_coarsened_lock(n);
     }

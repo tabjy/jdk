@@ -513,18 +513,36 @@ inline jlong BaseCountedLoopNode::stride_con() const {
 // limit check: limit <= max_int-stride.
 class LoopLimitNode : public Node {
   enum { Init=1, Limit=2, Stride=3 };
+
  public:
   LoopLimitNode( Compile* C, Node *init, Node *limit, Node *stride ) : Node(nullptr,init,limit,stride) {
     // Put it on the Macro nodes list to optimize during macro nodes expansion.
     init_flags(Flag_is_macro);
     C->add_macro_node(this);
   }
+
+  const Type* ValueIL(PhaseGVN* phase, BasicType bt) const;
+  Node *IdealIL(PhaseGVN *phase, bool can_reshape, BasicType bt);
+  Node* IdentityIL(PhaseGVN* phase, BasicType bt);
+  static Node* make(Compile* C, Node* init, Node* limit, Node* stride, BasicType bt);
+
   virtual int Opcode() const;
   virtual const Type *bottom_type() const { return TypeInt::INT; }
   virtual uint ideal_reg() const { return Op_RegI; }
-  virtual const Type* Value(PhaseGVN* phase) const;
-  virtual Node *Ideal(PhaseGVN *phase, bool can_reshape);
-  virtual Node* Identity(PhaseGVN* phase);
+  virtual const Type* Value(PhaseGVN* phase) const { return ValueIL(phase, T_INT); };
+  virtual Node *Ideal(PhaseGVN *phase, bool can_reshape) { return IdealIL(phase, can_reshape, T_INT); };
+  virtual Node* Identity(PhaseGVN* phase) { return IdentityIL(phase, T_INT); };
+};
+
+class LongLoopLimitNode : public LoopLimitNode {
+ public:
+  LongLoopLimitNode(Compile* C, Node* init, Node* limit, Node* stride) : LoopLimitNode(nullptr, init, limit, stride) {}
+  virtual int Opcode() const;
+  virtual const Type* bottom_type() const { return TypeLong::LONG; }
+  virtual uint ideal_reg() const { return Op_RegL; }
+  virtual const Type* Value(PhaseGVN* phase) const { return ValueIL(phase, T_LONG); };
+  virtual Node* Ideal(PhaseGVN* phase, bool can_reshape) { return IdealIL(phase, can_reshape, T_LONG); };
+  virtual Node* Identity(PhaseGVN* phase) { return IdentityIL(phase, T_LONG); };
 };
 
 // Support for strip mining

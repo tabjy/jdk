@@ -98,7 +98,7 @@ void IdealLoopTree::record_for_igvn() {
 // Compute loop trip count if possible. Do not recalculate trip count for
 // split loops (pre-main-post) which have their limits and inits behind Opaque node.
 void IdealLoopTree::compute_trip_count(PhaseIdealLoop* phase) {
-  if (!_head->as_Loop()->is_valid_counted_loop(T_INT)) {
+  if (!_head->as_Loop()->is_valid_counted_loop(T_INT)) { // TODO: consider long counted loops
     return;
   }
   CountedLoopNode* cl = _head->as_CountedLoop();
