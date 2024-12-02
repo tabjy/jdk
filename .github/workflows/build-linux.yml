@@ -85,7 +85,8 @@ jobs:
       - name: 'Install binutils'
         run: |
           apt-get update
-          apt-get install -y wget sudo autoconf unzip file zip
+          apt-get install -y wget git sudo autoconf unzip file zip
+        shell: bash
 
       - name: 'Checkout the JDK source'
         uses: actions/checkout@v4
@@ -111,6 +112,7 @@ jobs:
           if [[ '${{ inputs.apt-architecture }}' != '' ]]; then
             echo 'suffix=:${{ inputs.apt-architecture }}' >> $GITHUB_OUTPUT
           fi
+        shell: bash
 
       # Upgrading apt to solve libc6 installation bugs, see JDK-8260460.
       - name: 'Install toolchain and dependencies'
@@ -123,6 +125,7 @@ jobs:
           sudo apt-get install --only-upgrade apt
           sudo apt-get install -y gcc-${{ inputs.gcc-major-version }}${{ inputs.gcc-package-suffix }} g++-${{ inputs.gcc-major-version }}${{ inputs.gcc-package-suffix }} libxrandr-dev${{ steps.arch.outputs.suffix }} libxtst-dev${{ steps.arch.outputs.suffix }} libcups2-dev${{ steps.arch.outputs.suffix }} libasound2-dev${{ steps.arch.outputs.suffix }} ${{ inputs.apt-extra-packages }}
           sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-${{ inputs.gcc-major-version }} 100 --slave /usr/bin/g++ g++ /usr/bin/g++-${{ inputs.gcc-major-version }}
+        shell: bash
 
       - name: 'Configure'
         run: >
@@ -139,6 +142,7 @@ jobs:
           echo "Dumping config.log:" &&
           cat config.log &&
           exit 1)
+        shell: bash
 
       - name: 'Build'
         id: build
