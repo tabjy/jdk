@@ -69,6 +69,8 @@ jobs:
 
     container:
       image: ubuntu:22.04
+      env:
+        DEBIAN_FRONTEND: noninteractive
 
     strategy:
       fail-fast: false
