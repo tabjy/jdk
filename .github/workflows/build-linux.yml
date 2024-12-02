@@ -83,6 +83,11 @@ jobs:
       - name: 'Checkout the JDK source'
         uses: actions/checkout@v4
 
+      - name: 'Install binutils'
+        run: |
+          apt apt-get update \
+          && apt-get install -y wget
+
       - name: 'Get the BootJDK'
         id: bootjdk
         uses: ./.github/actions/get-bootjdk
