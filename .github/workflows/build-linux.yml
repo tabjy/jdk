@@ -82,10 +82,10 @@ jobs:
             suffix: -debug
 
     steps:
-      - name: 'Install binutils'
+      - name: 'Install utils'
         run: |
           apt-get update
-          apt-get install -y wget git sudo autoconf unzip file zip
+          apt-get install -y wget git sudo autoconf unzip file zip libfontconfig1-dev libffi-dev
         shell: bash
 
       - name: 'Checkout the JDK source'
