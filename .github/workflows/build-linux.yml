@@ -82,13 +82,13 @@ jobs:
             suffix: -debug
 
     steps:
-      - name: 'Checkout the JDK source'
-        uses: actions/checkout@v4
-
       - name: 'Install binutils'
         run: |
           apt-get update
-          apt-get install -y wget sudo autoconf
+          apt-get install -y wget sudo autoconf unzip file zip
+
+      - name: 'Checkout the JDK source'
+        uses: actions/checkout@v4
 
       - name: 'Get the BootJDK'
         id: bootjdk
