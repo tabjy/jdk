@@ -85,7 +85,7 @@ jobs:
       - name: 'Install utils'
         run: |
           apt-get update
-          apt-get install -y wget git sudo autoconf unzip file zip libfontconfig1-dev libffi-dev
+          apt-get install -y wget git sudo autoconf unzip file zip libfontconfig1-dev libffi-dev libx11-dev libxext-dev libxrender-dev libxrandr-dev libxtst-dev libxt-dev libcups2-dev libasound2-dev
         shell: bash
 
       - name: 'Checkout the JDK source'
