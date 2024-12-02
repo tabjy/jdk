@@ -85,8 +85,8 @@ jobs:
 
       - name: 'Install binutils'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y wget
+          apt-get update
+          apt-get install -y wget sudo
 
       - name: 'Get the BootJDK'
         id: bootjdk
