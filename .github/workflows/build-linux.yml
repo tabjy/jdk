@@ -67,6 +67,9 @@ jobs:
     name: build
     runs-on: self-hosted
 
+    container:
+      image: ubuntu:22.04
+
     strategy:
       fail-fast: false
       matrix:
