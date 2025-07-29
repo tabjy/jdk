@@ -305,7 +305,7 @@ public class Preconditions {
 
     /**
      * Checks if the sub-range from {@code fromIndex} (inclusive) to
-     * {@code toIndex} (exclusive) is within the bounds of range from {@code 0}
+     * {@code toIndex} (exclusive) is  within the bounds of range from {@code 0}
      * (inclusive) to {@code length} (exclusive).
      *
      * <p>The sub-range is defined to be out of bounds if any of the following
@@ -342,6 +342,7 @@ public class Preconditions {
      *         the exception factory function is {@code null}
      * @since 9
      */
+    @IntrinsicCandidate
     public static <X extends RuntimeException>
     int checkFromToIndex(int fromIndex, int toIndex, int length,
                          BiFunction<String, List<Number>, X> oobef) {
@@ -488,6 +489,7 @@ public class Preconditions {
      *         the exception factory function is {@code null}
      * @since 16
      */
+    // TODO: @IntrinsicCandidate
     public static <X extends RuntimeException>
     long checkFromToIndex(long fromIndex, long toIndex, long length,
                           BiFunction<String, List<Number>, X> oobef) {
