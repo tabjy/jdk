@@ -22,6 +22,8 @@
  *
  */
 
+#include <initializer_list>
+
 #include "asm/macroAssembler.hpp"
 #include "ci/ciSymbols.hpp"
 #include "ci/ciUtilities.inline.hpp"
@@ -1143,6 +1145,12 @@ bool LibraryCallKit::inline_countPositives() {
   return true;
 }
 
+// Intrinsified function returns true iff: 0 <= from <= to < length
+//
+// This is logically equivalent to returning true iff:
+// (1) (from|to|length)  >=  0;      (1.1) from = cast(0, form), to = cast(0, to), from = cast(0, from)
+// (2) to               u<  length;  (2.1) to   = cast(0, length)
+// (3) from             u<= to;      (3.1) to   = cast(0, to)
 bool LibraryCallKit::inline_preconditions_checkFromToIndex(BasicType bt) {
   // TODO: remove debug lines
   if (!UseNewCode) {
@@ -1152,6 +1160,7 @@ bool LibraryCallKit::inline_preconditions_checkFromToIndex(BasicType bt) {
   // TODO: move range checks deoptiomization to loop body?
   //       two range checks will be generated for the currect BCI or method, so assert twice
   //       keep intrisic deoptimization here
+  //       Or we can simply somehow check if there are at least two range checks left
   if (too_many_traps(Deoptimization::Reason_intrinsic) || too_many_traps(Deoptimization::Reason_range_check)) {
     return false;
   }
@@ -1162,78 +1171,38 @@ bool LibraryCallKit::inline_preconditions_checkFromToIndex(BasicType bt) {
   Node* to = bt == T_INT ? argument(1) : argument(2);
   Node* length = bt == T_INT ? argument(2) : argument(4);
 
-  // int checkFromToIndex(int fromIndex, int toIndex, int length,
-  //                          BiFunction<String, List<Number>, X> oobef) {
-  //   if (fromIndex < 0 || fromIndex > toIndex || toIndex > length)
-  //     throw outOfBoundsCheckFromToIndex(oobef, fromIndex, toIndex, length);
-  //   return fromIndex;
-  // }
-
-
-  // 1: length > 0
-  // 2: length = cast(length)
-  // 3: from u< length
-  // 4: to u< length
-
-  // TODO: from >= 0, to >= 0 => (from | to) >= 0
-
-  // 1: from >= 0, to >= 0, length >= 0
-  //  : (from | to | length) > 0
-
-  // XXX: don't premature optimize with bitshifts!
-  //  : (from | to | length) >> 63/31
-  // long square(long from, long to, long length) {
-  //   return from >= 0 && to >= 0 && length >= 0;
-  // }
-  // square(long, long, long):
-  //       orq     %rdx, %rsi  rsi |= rdx
-  //       orq     %rdi, %rsi  rsi |= rdi
-  //       movq    %rsi, %rax  rax =  rsi
-  //       notq    %rax        rax = !rax
-  //       shrq    $63, %rax   rax >>= 63
-  //       ret
-
-  // 1: from >=  0;      from = cast(0, form)
-  // 2: from u<= to;     to   = cast(from, to)
-  // 3: to   u<  length; to   = cast(to, length)
-
-  // check that length is positive
-  Node* len_pos_cmp = _gvn.transform(CmpNode::make(length, integercon(0, bt), bt));
-  Node* len_pos_bol = _gvn.transform(new BoolNode(len_pos_cmp, BoolTest::ge));
+  // (1) Check that all three arguments are positive: (from|to|length) >= 0
+  Node* or_form_to_node = _gvn.transform(AddNode::make_or(from, to, bt));
+  Node* or_node = _gvn.transform(AddNode::make_or(or_form_to_node, length, bt));
+  Node* pos_cmp = _gvn.transform(CmpNode::make(or_node, integercon(0, bt), bt));
+  Node* pos_bol = _gvn.transform(new BoolNode(pos_cmp, BoolTest::ge));
 
   {
-    BuildCutout unless(this, len_pos_bol, PROB_MAX);
+    BuildCutout unless(this, pos_bol, PROB_MAX);
     uncommon_trap(Deoptimization::Reason_intrinsic,
                   Deoptimization::Action_make_not_entrant);
   }
 
   if (stopped()) {
-    // Length is known to be always negative during compilation and the IR graph so far constructed is good so return success
+    // 'from' is known to be always negative during compilation and the IR graph so far constructed is good so return
+    // success.
     return true;
   }
 
-  // length is now known positive, add a cast node to make this explicit
-  jlong upper_bound = _gvn.type(length)->is_integer(bt)->hi_as_long();
-  Node* casted_length = ConstraintCastNode::make_cast_for_basic_type(
-      control(), length, TypeInteger::make(0, upper_bound, Type::WidenMax, bt),
-      ConstraintCastNode::RegularDependency, bt);
-  casted_length = _gvn.transform(casted_length);
-  replace_in_map(length, casted_length);
-  length = casted_length;
+  // (1.1) arguments are now known positive, add a cast node to make them explicit
+  for (auto arg : {&from, &to, &length}) {
+    jlong high = _gvn.type(*arg)->is_integer(bt)->hi_as_long();
+    Node* casted = ConstraintCastNode::make_cast_for_basic_type(
+        control(), *arg, TypeInteger::make(0, high, Type::WidenMax, bt),
+        ConstraintCastNode::UnconditionalDependency, bt); // TODO: change back to RegularDependency
+    casted = _gvn.transform(casted);
+    replace_in_map(*arg, casted);
+    *arg = casted;
+  }
 
-  // TODO: make sure 'from' <= 'to' to preserve semantics
-
-  for (int i = 0; i < 2; i++) {
-    Node* index = i == 0 ? from : to;
-
-    // We verified range check de-optimize before, but check again because two range checks will be generated for the
-    // current method (i.e., 'from' and 'to'). We potentially de-optimize for 'to' here.
-    if (i == 1 && too_many_traps(Deoptimization::Reason_range_check)) {
-      return true;
-    }
-
-    // Use an unsigned comparison for the range check itself
-    Node* rc_cmp = _gvn.transform(CmpNode::make(index, length, bt, true));
+  // (2) Unsigned comparison for the `to` range check: to u< length
+  {
+    Node* rc_cmp = _gvn.transform(CmpNode::make(to, length, bt, true));
     BoolTest::mask btest = BoolTest::lt;
     Node* rc_bool = _gvn.transform(new BoolNode(rc_cmp, btest));
     RangeCheckNode* rc = new RangeCheckNode(control(), rc_bool, PROB_MAX, COUNT_UNKNOWN);
@@ -1242,11 +1211,9 @@ bool LibraryCallKit::inline_preconditions_checkFromToIndex(BasicType bt) {
       record_for_igvn(rc);
     }
 
-    // FIXME: investigate if already fixed
-    // TODO: Internal Error (/home/kxu/Documents/github.com/tabjy/jdk/src/hotspot/share/opto/library_call.cpp:137), pid=554719, tid=554957
-    //       assert(ctrl == kit.control()) failed: Control flow was added although the intrinsic bailed out
     set_control(_gvn.transform(new IfTrueNode(rc)));
 
+    // Branch to slow path
     {
       PreserveJVMState pjvms(this);
       set_control(_gvn.transform(new IfFalseNode(rc)));
@@ -1259,18 +1226,63 @@ bool LibraryCallKit::inline_preconditions_checkFromToIndex(BasicType bt) {
       return true;
     }
 
-    // index is now known to be >= 0 and < length, cast it
-    Node* result = ConstraintCastNode::make_cast_for_basic_type(
-        control(), index, TypeInteger::make(0, upper_bound, Type::WidenMax, bt),
-        ConstraintCastNode::RegularDependency, bt);
+    // (2.1) 'to' is now known to be >= 0 and < length, cast it
+    jlong hi_length = _gvn.type(length)->is_integer(bt)->hi_as_long();
+    // TODO: verify type casting done correctly
+    Node* result = ConstraintCastNode::make_cast_for_basic_type(control(),
+      to, TypeInteger::make(0, hi_length - 1, Type::WidenMax, bt), // TODO: -1?
+        ConstraintCastNode::UnconditionalDependency, bt); // TODO: change back to RegularDependency
     result = _gvn.transform(result);
 
-    // function subgraph returns fromIndex
-    if (i == 0) {
-      set_result(result);
+    replace_in_map(to, result);
+    to = result;
+  }
+
+  // (3) Unsigned comparison for the 'from' range check: from u<= to
+  {
+    // We verified range check de-optimize before, but check again because two range checks will be generated for the
+    // current method (i.e., 'from' and 'to'). We potentially de-optimize for 'to' here.
+    if (too_many_traps(Deoptimization::Reason_range_check)) {
+      return true;
     }
 
-    replace_in_map(index, result);
+    Node* rc_cmp = _gvn.transform(CmpNode::make(from, to, bt, true));
+    BoolTest::mask btest = BoolTest::le;
+    Node* rc_bool = _gvn.transform(new BoolNode(rc_cmp, btest));
+    RangeCheckNode* rc = new RangeCheckNode(control(), rc_bool, PROB_MAX, COUNT_UNKNOWN);
+    _gvn.set_type(rc, rc->Value(&_gvn));
+    if (!rc_bool->is_Con()) {
+      record_for_igvn(rc);
+    }
+
+    set_control(_gvn.transform(new IfTrueNode(rc)));
+
+    // Branch to slow path
+    {
+      PreserveJVMState pjvms(this);
+      set_control(_gvn.transform(new IfFalseNode(rc)));
+      uncommon_trap(Deoptimization::Reason_range_check,
+                    Deoptimization::Action_make_not_entrant);
+    }
+
+    if (stopped()) {
+      // Range check is known to always fail during compilation and the IR graph so far constructed is good so return success
+      return true;
+    }
+
+    // (3.1) 'from' is now known to be >= 0 and <= to, cast it
+    jlong hi_to = _gvn.type(to)->is_integer(bt)->hi_as_long();
+    // TODO: verify type casting done correctly
+    Node* result = ConstraintCastNode::make_cast_for_basic_type(control(),
+      from, TypeInteger::make(0, hi_to, Type::WidenMax, bt),
+        ConstraintCastNode::UnconditionalDependency, bt); // TODO: change back to RegularDependency
+    result = _gvn.transform(result);
+
+    // function subgraph returns 'from'
+    set_result(result);
+
+    replace_in_map(from, result);
+    from = result;
   }
 
   return true;
@@ -1302,7 +1314,7 @@ bool LibraryCallKit::inline_preconditions_checkIndex(BasicType bt) {
   jlong upper_bound = _gvn.type(length)->is_integer(bt)->hi_as_long();
   Node* casted_length = ConstraintCastNode::make_cast_for_basic_type(
       control(), length, TypeInteger::make(0, upper_bound, Type::WidenMax, bt),
-      ConstraintCastNode::RegularDependency, bt);
+      ConstraintCastNode::UnconditionalDependency, bt); // TODO: change back to RegularDependency
   casted_length = _gvn.transform(casted_length);
   replace_in_map(length, casted_length);
   length = casted_length;
@@ -1332,7 +1344,7 @@ bool LibraryCallKit::inline_preconditions_checkIndex(BasicType bt) {
   // index is now known to be >= 0 and < length, cast it
   Node* result = ConstraintCastNode::make_cast_for_basic_type(
       control(), index, TypeInteger::make(0, upper_bound, Type::WidenMax, bt),
-      ConstraintCastNode::RegularDependency, bt);
+      ConstraintCastNode::UnconditionalDependency, bt); // TODO: change back to RegularDependency
   result = _gvn.transform(result);
   set_result(result);
   replace_in_map(index, result);
