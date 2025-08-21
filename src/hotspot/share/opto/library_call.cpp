@@ -1145,12 +1145,12 @@ bool LibraryCallKit::inline_countPositives() {
   return true;
 }
 
-Node* insert_unsigned_range_check(LibraryCallKit& kit, Node* lhs, Node* rhs, BasicType bt) {
+Node* insert_unsigned_range_check(LibraryCallKit& kit, Node* lhs, Node* rhs, BoolTest::mask mask, BasicType bt) {
   PhaseGVN& gvn = kit.gvn();
 
   // Unsigned comparison itself
   Node* rc_cmp = gvn.transform(CmpNode::make(lhs, rhs, bt, true));
-  Node* rc_bool = gvn.transform(new BoolNode(rc_cmp, BoolTest::le));
+  Node* rc_bool = gvn.transform(new BoolNode(rc_cmp, mask));
   RangeCheckNode* rc = new RangeCheckNode(kit.control(), rc_bool, PROB_MAX, COUNT_UNKNOWN);
   gvn.set_type(rc, rc->Value(&gvn));
   if (!rc_bool->is_Con()) {
@@ -1180,7 +1180,7 @@ Node* insert_unsigned_range_check(LibraryCallKit& kit, Node* lhs, Node* rhs, Bas
 
   Node* result = ConstraintCastNode::make_cast_for_basic_type(
       kit.control(), lhs, TypeInteger::make(lo_lhs, hi_rhs, Type::WidenMax, bt),
-        ConstraintCastNode::UnconditionalDependency, bt); // TODO: change back to RegularDependency
+        ConstraintCastNode::RegularDependency, bt); // TODO: change back to RegularDependency
   result = gvn.transform(result);
 
   kit.replace_in_map(lhs, result);
@@ -1188,7 +1188,61 @@ Node* insert_unsigned_range_check(LibraryCallKit& kit, Node* lhs, Node* rhs, Bas
   return result;
 }
 
-// Inline and intrisify six similar Java Preconditions class methods:
+/*
+
+long checkIndex(long index, long length,
+                    BiFunction<String, List<Number>, X> oobef) {
+        if (index < 0 || index >= length)
+            throw outOfBoundsCheckIndex(oobef, index, length);
+        return index;
+    }
+
+index >= 0 && index < length
+
+
+0 <= index < length
+
+---
+
+
+
+long checkFromToIndex(long fromIndex, long toIndex, long length,
+                          BiFunction<String, List<Number>, X> oobef) {
+        if (fromIndex < 0 || fromIndex > toIndex || toIndex > length)
+            throw outOfBoundsCheckFromToIndex(oobef, fromIndex, toIndex, length);
+        return fromIndex;
+    }
+
+=>
+fromIndex >= 0 && fromIndex <= toIndex && toIndex <= length
+
+from >= 0 && from <= to && to <= length
+
+0 <= from <= to <= length
+
+---
+
+int checkFromIndexSize(int fromIndex, int size, int length,
+                           BiFunction<String, List<Number>, X> oobef) {
+        if ((length | fromIndex | size) < 0 || size > length - fromIndex)
+            throw outOfBoundsCheckFromIndexSize(oobef, fromIndex, size, length);
+        return fromIndex;
+    }
+
+
+(length | fromIndex | size) >= 0 && size <= length - fromIndex
+
+(length | from | size) >= 0 && size <= length - from
+
+
+===
+0 <= index < length
+
+0 <= from <= (to = from + size) <= length
+ */
+
+
+// Inline and intrisify 6 similar Java Preconditions class methods:
 //     (a) checkIndex(int index, int length, BiFunction oobef)
 //     (b) checkFromToIndex(int from, int to, int length, BiFunction oobef)
 //     (c) checkFromIndexSize(int from, int size, int length, BiFunction oobef)
@@ -1204,6 +1258,7 @@ Node* insert_unsigned_range_check(LibraryCallKit& kit, Node* lhs, Node* rhs, Bas
 //         (1.1) cast non-null arguments to be positive: arg = [0, arg_hi]
 //     (2) for (c) only: produce `to = from + size`
 //     (3) for (b) and (c) only: range check `from u<= to`, and 'to u<= length'
+// FIXME: from has to be < length
 //     (4) for (a) only: range check `from u<= length`
 // Types for `from`, `to`, and `length` are updated on each passing branch to narrow down ranges.
 bool LibraryCallKit::inline_preconditions_checkIndex_helper(Node* from, Node* to, Node* size, Node* length, BasicType bt) {
@@ -1219,12 +1274,21 @@ bool LibraryCallKit::inline_preconditions_checkIndex_helper(Node* from, Node* to
   }
 
   // (1) Check that all arguments are positive: (from|length) >= 0, (from|to|length) >= 0 or (from|size|length) >= 0
-  Node* pos_or_node = _gvn.transform(AddNode::make_or(from, length, bt)); // (a)
-  if (to != nullptr) {
-    pos_or_node = _gvn.transform(AddNode::make_or(pos_or_node, to, bt)); // (b)
-  } else if (size != nullptr) {
-    pos_or_node = _gvn.transform(AddNode::make_or(pos_or_node, size, bt)); // (c)
+  // FIXME: clean it up
+  Node* pos_or_node;
+  if (to == nullptr && size == nullptr) {
+    pos_or_node = length;
+  } else {
+    // FIXME: OR node could potentially create data dependency on IV
+    pos_or_node = _gvn.transform(AddNode::make_or(from, length, bt)); // (b) and (c)
+
+    if (to != nullptr) {
+      pos_or_node = _gvn.transform(AddNode::make_or(pos_or_node, to, bt)); // (b)
+    } else if (size != nullptr) {
+      pos_or_node = _gvn.transform(AddNode::make_or(pos_or_node, size, bt)); // (c)
+    }
   }
+
   Node* pos_cmp = _gvn.transform(CmpNode::make(pos_or_node, integercon(0, bt), bt));
   Node* pos_bol = _gvn.transform(new BoolNode(pos_cmp, BoolTest::ge));
 
@@ -1242,14 +1306,15 @@ bool LibraryCallKit::inline_preconditions_checkIndex_helper(Node* from, Node* to
 
   // (1.1) Arguments are now known positive, add a cast node to make them explicit
   for (auto arg : {&from, &to, &size, &length}) {
+  // for (auto arg : {&length}) {
     if (*arg == nullptr) {
       continue;
-    }
+   }
 
     jlong hi = _gvn.type(*arg)->is_integer(bt)->hi_as_long();
     Node* casted = ConstraintCastNode::make_cast_for_basic_type(
         control(), *arg, TypeInteger::make(0, hi, Type::WidenMax, bt),
-        ConstraintCastNode::UnconditionalDependency, bt); // DEBUG: change back to RegularDependency
+        ConstraintCastNode::RegularDependency, bt); // DEBUG: change back to RegularDependency
     casted = _gvn.transform(casted);
     replace_in_map(*arg, casted);
     *arg = casted;
@@ -1262,15 +1327,17 @@ bool LibraryCallKit::inline_preconditions_checkIndex_helper(Node* from, Node* to
 
   if (to != nullptr) {
     // (3) For (b) and (c)
+    // FIXME
     // Unsigned comparison for 'from u<= to'
-    if ((from = insert_unsigned_range_check(*this, from, to, bt)) == nullptr) {
+    if ((from = insert_unsigned_range_check(*this, from, to, BoolTest::le, bt)) == nullptr) {
       return true;
     }
+    // FIXME
     // Unsigned comparison for 'to u<= length'
-    insert_unsigned_range_check(*this, to, length, bt);
+    insert_unsigned_range_check(*this, to, length, BoolTest::le, bt);
   } else {
-    // (4) For (a) only, range check `from u<= length`
-    from = insert_unsigned_range_check(*this, from, length, bt);
+    // (4) For (a) only, range check `from u< length`
+    from = insert_unsigned_range_check(*this, from, length, BoolTest::lt, bt);
   }
 
   // function subgraph returns 'from'
