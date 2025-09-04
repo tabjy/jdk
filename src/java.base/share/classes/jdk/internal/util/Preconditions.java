@@ -391,6 +391,7 @@ public class Preconditions {
      *         the exception factory function is {@code null}
      * @since 9
      */
+    @IntrinsicCandidate
     public static <X extends RuntimeException>
     int checkFromIndexSize(int fromIndex, int size, int length,
                            BiFunction<String, List<Number>, X> oobef) {
@@ -489,11 +490,11 @@ public class Preconditions {
      *         the exception factory function is {@code null}
      * @since 16
      */
-    // TODO: @IntrinsicCandidate
+    @IntrinsicCandidate
     public static <X extends RuntimeException>
     long checkFromToIndex(long fromIndex, long toIndex, long length,
                           BiFunction<String, List<Number>, X> oobef) {
-        if (fromIndex < 0 || fromIndex > toIndex || toIndex > length)
+        if (fromIndex < 0 || fromIndex > toIndex || toIndex > length)`
             throw outOfBoundsCheckFromToIndex(oobef, fromIndex, toIndex, length);
         return fromIndex;
     }
@@ -538,6 +539,7 @@ public class Preconditions {
      *         the exception factory function is {@code null}
      * @since 16
      */
+    @IntrinsicCandidate
     public static <X extends RuntimeException>
     long checkFromIndexSize(long fromIndex, long size, long length,
                             BiFunction<String, List<Number>, X> oobef) {
