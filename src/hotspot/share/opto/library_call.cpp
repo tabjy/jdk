@@ -509,12 +509,14 @@ bool LibraryCallKit::try_to_inline(int predicate) {
   case vmIntrinsics::_copyOfRange:              return inline_array_copyOf(true);
   case vmIntrinsics::_equalsB:                  return inline_array_equals(StrIntrinsicNode::LL);
   case vmIntrinsics::_equalsC:                  return inline_array_equals(StrIntrinsicNode::UU);
-  case vmIntrinsics::_Preconditions_checkIndex: return inline_preconditions_checkIndex(T_INT);
-  case vmIntrinsics::_Preconditions_checkLongIndex: return inline_preconditions_checkIndex(T_LONG);
-  case vmIntrinsics::_Preconditions_checkFromToIndex: return inline_preconditions_checkFromToIndex(T_INT);
-  case vmIntrinsics::_Preconditions_checkLongFromToIndex: return inline_preconditions_checkFromToIndex(T_LONG);
-  case vmIntrinsics::_Preconditions_checkFromIndexSize: return inline_preconditions_checkFromIndexSize(T_INT);
+
+  case vmIntrinsics::_Preconditions_checkIndex:             return inline_preconditions_checkIndex(T_INT);
+  case vmIntrinsics::_Preconditions_checkLongIndex:         return inline_preconditions_checkIndex(T_LONG);
+  case vmIntrinsics::_Preconditions_checkFromToIndex:       return inline_preconditions_checkFromToIndex(T_INT);
+  case vmIntrinsics::_Preconditions_checkLongFromToIndex:   return inline_preconditions_checkFromToIndex(T_LONG);
+  case vmIntrinsics::_Preconditions_checkFromIndexSize:     return inline_preconditions_checkFromIndexSize(T_INT);
   case vmIntrinsics::_Preconditions_checkLongFromIndexSize: return inline_preconditions_checkFromIndexSize(T_LONG);
+
   case vmIntrinsics::_clone:                    return inline_native_clone(intrinsic()->is_virtual());
 
   case vmIntrinsics::_allocateUninitializedArray: return inline_unsafe_newArray(true);
@@ -1272,13 +1274,13 @@ int checkFromIndexSize(int fromIndex, int size, int length,
  */
 
 
-// Inline and intrisify 6 similar Java Preconditions class methods:
+// Inline and intrinsify 6 similar Java Preconditions class methods:
 //     (a) checkIndex(int index, int length, BiFunction oobef)
 //     (b) checkFromToIndex(int from, int to, int length, BiFunction oobef)
 //     (c) checkFromIndexSize(int from, int size, int length, BiFunction oobef)
 //     ... and respective long variants of the above.
 //
-// The intrisification should preserve the following semantics from Java code, i.e, fallback to Java code iff:
+// The intrinsification should preserve the following semantics from Java code, i.e, fallback to Java code iff:
 //     (a) checkIndex(from, length, ...)              : from < 0 || from >= length
 //     (b) checkFromToIndex(from, to, length, ...)    : fromIndex < 0 || fromIndex > toIndex || toIndex > length
 //     (c) checkFromIndexSize(from, size, length, ...): (length | fromIndex | size) < 0 || size > length - fromIndex
@@ -1297,7 +1299,7 @@ bool LibraryCallKit::inline_preconditions_checkIndex_helper(Node* index, Node* f
   assert(!(to != nullptr && size != nullptr), "only one of 'to' or 'size' can be set");
   assert(!(index != nullptr && from != nullptr), "only one of 'index' or 'from' can be set");
 
-  // TODO: move range checks deoptiomization to loop body?
+  // TODO: move range checks deoptimization to loop body?
   //       two range checks will be generated for the current BCI or method, so assert twice
   //       keep intrinsic deoptimization here
   //       Or we can simply somehow check if there are at least two range checks left

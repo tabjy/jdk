@@ -494,7 +494,7 @@ public class Preconditions {
     public static <X extends RuntimeException>
     long checkFromToIndex(long fromIndex, long toIndex, long length,
                           BiFunction<String, List<Number>, X> oobef) {
-        if (fromIndex < 0 || fromIndex > toIndex || toIndex > length)`
+        if (fromIndex < 0 || fromIndex > toIndex || toIndex > length)
             throw outOfBoundsCheckFromToIndex(oobef, fromIndex, toIndex, length);
         return fromIndex;
     }
