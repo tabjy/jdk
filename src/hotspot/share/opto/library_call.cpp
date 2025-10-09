@@ -1216,7 +1216,6 @@ Node* insert_unsigned_range_check(LibraryCallKit& kit, Node* lhs, Node* rhs, Boo
   result = gvn.transform(result);
 
   kit.replace_in_map(lhs, result);
-
   return result;
 }
 
@@ -1293,11 +1292,10 @@ int checkFromIndexSize(int fromIndex, int size, int length,
 // FIXME: from has to be < length
 //     (4) for (a) only: range check `from u<= length`
 // Types for `from`, `to`, and `length` are updated on each passing branch to narrow down ranges.
-bool LibraryCallKit::inline_preconditions_checkIndex_helper(Node* index, Node* from, Node* to, Node* size, Node* length, BasicType bt) {
+bool LibraryCallKit::inline_preconditions_checkIndex_helper(Node* from, Node* to, Node* size, Node* length, BasicType bt) {
   assert(bt == T_INT || bt == T_LONG, "");
 
   assert(!(to != nullptr && size != nullptr), "only one of 'to' or 'size' can be set");
-  assert(!(index != nullptr && from != nullptr), "only one of 'index' or 'from' can be set");
 
   // TODO: move range checks deoptimization to loop body?
   //       two range checks will be generated for the current BCI or method, so assert twice
@@ -1334,10 +1332,10 @@ bool LibraryCallKit::inline_preconditions_checkIndex_helper(Node* index, Node* f
   // }
 
   // Note: check three inputs separately instead of OR them together to allow branch elimination
-  if (from != nullptr) insert_positive_check(*this, from, bt);
-  if (to != nullptr) insert_positive_check(*this, to, bt);
-  if (size != nullptr) insert_positive_check(*this, size, bt);
-  if (length != nullptr) insert_positive_check(*this, length, bt);
+  if (from != nullptr) from = insert_positive_check(*this, from, bt);
+  if (to != nullptr) to = insert_positive_check(*this, to, bt);
+  if (size != nullptr) size = insert_positive_check(*this, size, bt);
+  if (length != nullptr) length = insert_positive_check(*this, length, bt);
 
   if (stopped()) {
     // 'from' is known to be always negative during compilation and the IR graph so far constructed is good so return
@@ -1398,7 +1396,7 @@ bool LibraryCallKit::inline_preconditions_checkFromIndexSize(BasicType bt) {
   Node* size = bt == T_INT ? argument(1) : argument(2);
   Node* length = bt == T_INT ? argument(2) : argument(4);
 
-  return inline_preconditions_checkIndex_helper(nullptr, from, nullptr, size, length, bt);
+  return inline_preconditions_checkIndex_helper(from, nullptr, size, length, bt);
 
   return false;
 }
@@ -1430,7 +1428,7 @@ bool LibraryCallKit::inline_preconditions_checkFromToIndex(BasicType bt) {
   Node* length = bt == T_INT ? argument(2) : argument(4);
 
   if (UseNewCode) {
-    return inline_preconditions_checkIndex_helper(nullptr, from, to, nullptr, length, bt);
+    return inline_preconditions_checkIndex_helper(from, to, nullptr, length, bt);
   }
 
   // (1) Check that all three arguments are positive: (from|to|length) >= 0
@@ -1555,74 +1553,18 @@ bool LibraryCallKit::inline_preconditions_checkIndex(BasicType bt) {
   Node* index = argument(0);
   Node* length = bt == T_INT ? argument(1) : argument(2);
 
-  // if (UseNewCode) {
-  //   return inline_preconditions_checkIndex_helper(nullptr, index, nullptr, nullptr, length, bt);
-  // }
-
   if (too_many_traps(Deoptimization::Reason_intrinsic) || too_many_traps(Deoptimization::Reason_range_check)) {
     return false;
   }
 
-  // check that length is positive
-  // Node* len_pos_cmp = _gvn.transform(CmpNode::make(length, integercon(0, bt), bt));
-  // Node* len_pos_bol = _gvn.transform(new BoolNode(len_pos_cmp, BoolTest::ge));
-  //
-  // {
-  //   BuildCutout unless(this, len_pos_bol, PROB_MAX);
-  //   uncommon_trap(Deoptimization::Reason_intrinsic,
-  //                 Deoptimization::Action_make_not_entrant);
-  // }
-  //
-  // if (stopped()) {
-  //   // Length is known to be always negative during compilation and the IR graph so far constructed is good so return success
-  //   return true;
-  // }
-
-  // length is now known positive, add a cast node to make this explicit
-  // jlong upper_bound = _gvn.type(length)->is_integer(bt)->hi_as_long();
-  // Node* casted_length = ConstraintCastNode::make_cast_for_basic_type(
-  //     control(), length, TypeInteger::make(0, upper_bound, Type::WidenMax, bt),
-  //     ConstraintCastNode::RegularDependency, bt);
-  // casted_length = _gvn.transform(casted_length);
-  // replace_in_map(length, casted_length);
-  // length = casted_length;
-
-  if ((length = insert_positive_check(*this, length, bt)) == nullptr) {
+  // Check that length is positive
+  length = insert_positive_check(*this, length, bt);
+  if (length == nullptr) {
     // Length is known to be always negative during compilation and the IR graph so far constructed is good so return success
     return true;
   }
 
-  insert_unsigned_range_check(*this, index, length, BoolTest::lt, bt);
-
-  // // Use an unsigned comparison for the range check itself
-  // Node* rc_cmp = _gvn.transform(CmpNode::make(index, length, bt, true));
-  // BoolTest::mask btest = BoolTest::lt;
-  // Node* rc_bool = _gvn.transform(new BoolNode(rc_cmp, btest));
-  // RangeCheckNode* rc = new RangeCheckNode(control(), rc_bool, PROB_MAX, COUNT_UNKNOWN);
-  // _gvn.set_type(rc, rc->Value(&_gvn));
-  // if (!rc_bool->is_Con()) {
-  //   record_for_igvn(rc);
-  // }
-  // set_control(_gvn.transform(new IfTrueNode(rc)));
-  // {
-  //   PreserveJVMState pjvms(this);
-  //   set_control(_gvn.transform(new IfFalseNode(rc)));
-  //   uncommon_trap(Deoptimization::Reason_range_check,
-  //                 Deoptimization::Action_make_not_entrant);
-  // }
-  //
-  // if (stopped()) {
-  //   // Range check is known to always fail during compilation and the IR graph so far constructed is good so return success
-  //   return true;
-  // }
-
-  // index is now known to be >= 0 and < length, cast it
-  // Node* result = ConstraintCastNode::make_cast_for_basic_type(
-  //     control(), index, TypeInteger::make(0, upper_bound, Type::WidenMax, bt),
-  //     ConstraintCastNode::RegularDependency, bt);
-  // result = _gvn.transform(result);
-  // set_result(result);
-  // replace_in_map(index, result);
+  // Use an unsigned comparison for the range check itself
   Node* result = insert_unsigned_range_check(*this, index, length, BoolTest::lt, bt);
   if (result == nullptr) {
     // Range check is known to always fail during compilation and the IR graph so far constructed is good so return success
@@ -1630,7 +1572,6 @@ bool LibraryCallKit::inline_preconditions_checkIndex(BasicType bt) {
   }
 
   set_result(result);
-
   return true;
 }
 
