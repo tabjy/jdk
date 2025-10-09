@@ -1219,334 +1219,68 @@ Node* insert_unsigned_range_check(LibraryCallKit& kit, Node* lhs, Node* rhs, Boo
   return result;
 }
 
-/*
-
-long checkIndex(long index, long length,
-                    BiFunction<String, List<Number>, X> oobef) {
-        if (index < 0 || index >= length)
-            throw outOfBoundsCheckIndex(oobef, index, length);
-        return index;
-    }
-
-index >= 0 && index < length
-
-
-0 <= index < length
-
----
-
-
-
-long checkFromToIndex(long fromIndex, long toIndex, long length,
-                          BiFunction<String, List<Number>, X> oobef) {
-        if (fromIndex < 0 || fromIndex > toIndex || toIndex > length)
-            throw outOfBoundsCheckFromToIndex(oobef, fromIndex, toIndex, length);
-        return fromIndex;
-    }
-
-=>
-fromIndex >= 0 && fromIndex <= toIndex && toIndex <= length
-
-from >= 0 && from <= to && to <= length
-
-0 <= from <= to <= length
-
----
-
-int checkFromIndexSize(int fromIndex, int size, int length,
-                           BiFunction<String, List<Number>, X> oobef) {
-        if ((length | fromIndex | size) < 0 || size > length - fromIndex)
-            throw outOfBoundsCheckFromIndexSize(oobef, fromIndex, size, length);
-        return fromIndex;
-    }
-
-
-(length | fromIndex | size) >= 0 && size <= length - fromIndex
-
-(length | from | size) >= 0 && size <= length - from
-
-
-===
-0 <= index < length
-
-0 <= from <= (to = from + size) <= length
- */
-
-
-// Inline and intrinsify 6 similar Java Preconditions class methods:
-//     (a) checkIndex(int index, int length, BiFunction oobef)
-//     (b) checkFromToIndex(int from, int to, int length, BiFunction oobef)
-//     (c) checkFromIndexSize(int from, int size, int length, BiFunction oobef)
-//     ... and respective long variants of the above.
-//
-// The intrinsification should preserve the following semantics from Java code, i.e, fallback to Java code iff:
-//     (a) checkIndex(from, length, ...)              : from < 0 || from >= length
-//     (b) checkFromToIndex(from, to, length, ...)    : fromIndex < 0 || fromIndex > toIndex || toIndex > length
-//     (c) checkFromIndexSize(from, size, length, ...): (length | fromIndex | size) < 0 || size > length - fromIndex
-//
-// These conditions are generalized to:
-//     (1) check all arguments are positive: `(from|to|size|length) >= 0` (omitting ones that doesn't apply)
-//         (1.1) cast non-null arguments to be positive: arg = [0, arg_hi]
-//     (2) for (c) only: produce `to = from + size`
-//     (3) for (b) and (c) only: range check `from u<= to`, and 'to u<= length'
-// FIXME: from has to be < length
-//     (4) for (a) only: range check `from u<= length`
-// Types for `from`, `to`, and `length` are updated on each passing branch to narrow down ranges.
-bool LibraryCallKit::inline_preconditions_checkIndex_helper(Node* from, Node* to, Node* size, Node* length, BasicType bt) {
+// checkFromToIndex  (from, to,   length, ...): !(from < 0 || from > to || to > length)
+//                                           => from >= 0 && from <= to && to <= length
+bool LibraryCallKit::inline_preconditions_checkFromToIndex_helper(Node* from, Node* to, Node* length, BasicType bt) {
   assert(bt == T_INT || bt == T_LONG, "");
 
-  assert(!(to != nullptr && size != nullptr), "only one of 'to' or 'size' can be set");
-
-  // TODO: move range checks deoptimization to loop body?
-  //       two range checks will be generated for the current BCI or method, so assert twice
-  //       keep intrinsic deoptimization here
-  //       Or we can simply somehow check if there are at least two range checks left
-  // TODO: allow specifying required number of traps to too_many_traps()? (separate issue?)
   if (too_many_traps(Deoptimization::Reason_intrinsic) || too_many_traps(Deoptimization::Reason_range_check)) {
     return false;
   }
 
-  // (1) Check that all arguments are positive: (from|length) >= 0, (from|to|length) >= 0 or (from|size|length) >= 0
-  // FIXME: clean it up
-  // Node* pos_or_node;
-  // if (to == nullptr && size == nullptr) {
-  //   pos_or_node = length;
-  // } else {
-  //   // FIXME: OR node could potentially create data dependency on IV
-  //   pos_or_node = _gvn.transform(AddNode::make_or(from, length, bt)); // (b) and (c)
-  //
-  //   if (to != nullptr) {
-  //     pos_or_node = _gvn.transform(AddNode::make_or(pos_or_node, to, bt)); // (b)
-  //   } else if (size != nullptr) {
-  //     pos_or_node = _gvn.transform(AddNode::make_or(pos_or_node, size, bt)); // (c)
-  //   }
-  // }
-  //
-  // Node* pos_cmp = _gvn.transform(CmpNode::make(pos_or_node, integercon(0, bt), bt));
-  // Node* pos_bol = _gvn.transform(new BoolNode(pos_cmp, BoolTest::ge));
-  //
-  // {
-  //   BuildCutout unless(this, pos_bol, PROB_MAX);
-  //   uncommon_trap(Deoptimization::Reason_intrinsic,
-  //                 Deoptimization::Action_make_not_entrant);
-  // }
-
-  // Note: check three inputs separately instead of OR them together to allow branch elimination
-  if (from != nullptr) from = insert_positive_check(*this, from, bt);
-  if (to != nullptr) to = insert_positive_check(*this, to, bt);
-  if (size != nullptr) size = insert_positive_check(*this, size, bt);
-  if (length != nullptr) length = insert_positive_check(*this, length, bt);
+  // Check that all arguments are positive. Note that even the following are logically equivalent to
+  // (from|to|length) >= 0 or (from|size|length) >= 0, we're checking them separately to allow branch elimination in
+  // case only one or two of them can be deduced.
+  from = insert_positive_check(*this, from, bt);
+  to = insert_positive_check(*this, to, bt);
+  length = insert_positive_check(*this, length, bt);
 
   if (stopped()) {
-    // 'from' is known to be always negative during compilation and the IR graph so far constructed is good so return
-    // success.
+    // One argument is known to be always negative during compilation and the IR graph so far constructed is good so
+    // return success.
     return true;
   }
 
-  // (1.1) Arguments are now known positive, add a cast node to make them explicit
-  for (auto arg : {&from, &to, &size, &length}) {
-  // for (auto arg : {&length}) {
-    if (*arg == nullptr) {
-      continue;
-   }
-
-    jlong hi = _gvn.type(*arg)->is_integer(bt)->hi_as_long();
-    Node* casted = ConstraintCastNode::make_cast_for_basic_type(
-        control(), *arg, TypeInteger::make(0, hi, Type::WidenMax, bt),
-        ConstraintCastNode::RegularDependency, bt);
-    casted = _gvn.transform(casted);
-    replace_in_map(*arg, casted);
-    *arg = casted;
+  // Unsigned comparison for 'from u<= to'
+  from = insert_unsigned_range_check(*this, from, to, BoolTest::le, bt);
+  if (from == nullptr) {
+    return true; // `from` is always greater than `to`
   }
 
-  // (2) For (c), produce `to = from + size`
-  if (size != nullptr) {
-      to = _gvn.transform(AddNode::make(from, size, bt));
-  }
-
-  if (to != nullptr) {
-    // (3) For (b) and (c)
-    // FIXME
-    // Unsigned comparison for 'from u<= to'
-    if ((from = insert_unsigned_range_check(*this, from, to, BoolTest::le, bt)) == nullptr) {
-      return true;
-    }
-    // FIXME
-    // Unsigned comparison for 'to u<= length'
-    insert_unsigned_range_check(*this, to, length, BoolTest::le, bt);
-  } else {
-    // (4) For (a) only, range check `from u< length`
-    from = insert_unsigned_range_check(*this, from, length, BoolTest::lt, bt);
-  }
-
-  // function subgraph returns 'from'
-  set_result(from);
-
-  return true;
-}
-
-// TODO: rearrange method order in source code
-// checkFromIndexSize(from, size, length, ...): (length | fromIndex | size) < 0 || size > length - fromIndex
-bool LibraryCallKit::inline_preconditions_checkFromIndexSize(BasicType bt) {
-  if (!UseNewCode) {
+  if (too_many_traps(Deoptimization::Reason_range_check)) { // We can insert the second trap?
     return false;
   }
 
+  // Unsigned comparison for 'to u<= length'
+  to = insert_unsigned_range_check(*this, to, to, BoolTest::le, bt);
+  if  (to == nullptr) {
+    return true; // `to` is always greater than `length`
+  }
+
+  set_result(from);
+  return true;
+}
+
+bool LibraryCallKit::inline_preconditions_checkFromIndexSize(BasicType bt) {
+  // (IIILjava/util/function/BiFunction;)I]: (0: from),   (1: size),   (2: length),   (3: biFunction)
+  // (JJJLjava/util/function/BiFunction;)J]: (0-1: from), (2-3: size), (4-5: length), (6: biFunction)
   Node* from = argument(0);
   Node* size = bt == T_INT ? argument(1) : argument(2);
   Node* length = bt == T_INT ? argument(2) : argument(4);
 
-  return inline_preconditions_checkIndex_helper(from, nullptr, size, length, bt);
+  Node* to = _gvn.transform(AddNode::make(from, size, bt));
 
-  return false;
+  return inline_preconditions_checkFromToIndex_helper(from, to, length, bt);
 }
 
-// Intrinsified function returns true iff: 0 <= from <= to < length
-//
-// This is logically equivalent to returning true iff:
-// (1) (from|to|length)  >= 0;       (1.1) from = cast(0, form), to = cast(0, to), from = cast(0, from)
-// (2) to               u<= length;  (2.1) to   = cast(0, length)
-// (3) from             u<= to;      (3.1) to   = cast(0, to)
 bool LibraryCallKit::inline_preconditions_checkFromToIndex(BasicType bt) {
-  // TODO: remove debug lines
-  if (!UseNewCode) {
-    return false;
-  }
-
-  // TODO: move range checks deoptiomization to loop body?
-  //       two range checks will be generated for the currect BCI or method, so assert twice
-  //       keep intrisic deoptimization here
-  //       Or we can simply somehow check if there are at least two range checks left
-  // if (too_many_traps(Deoptimization::Reason_intrinsic) || too_many_traps(Deoptimization::Reason_range_check)) {
-  //   return false;
-  // }
-
-  // (IIILjava/util/function/BiFunction;)I]: (0: from), (1: to), (2: length), (3: biFunction)
+  // (IIILjava/util/function/BiFunction;)I]: (0: from),   (1: to),   (2: length),   (3: biFunction)
   // (JJJLjava/util/function/BiFunction;)J]: (0-1: from), (2-3: to), (4-5: length), (6: biFunction)
   Node* from = argument(0);
   Node* to = bt == T_INT ? argument(1) : argument(2);
   Node* length = bt == T_INT ? argument(2) : argument(4);
 
-  if (UseNewCode) {
-    return inline_preconditions_checkIndex_helper(from, to, nullptr, length, bt);
-  }
-
-  // (1) Check that all three arguments are positive: (from|to|length) >= 0
-  Node* or_form_to_node = _gvn.transform(AddNode::make_or(from, to, bt));
-  Node* or_node = _gvn.transform(AddNode::make_or(or_form_to_node, length, bt));
-  Node* pos_cmp = _gvn.transform(CmpNode::make(or_node, integercon(0, bt), bt));
-  Node* pos_bol = _gvn.transform(new BoolNode(pos_cmp, BoolTest::ge));
-
-  {
-    BuildCutout unless(this, pos_bol, PROB_MAX);
-    uncommon_trap(Deoptimization::Reason_intrinsic,
-                  Deoptimization::Action_make_not_entrant);
-  }
-
-  if (stopped()) {
-    // 'from' is known to be always negative during compilation and the IR graph so far constructed is good so return
-    // success.
-    return true;
-  }
-
-  // (1.1) arguments are now known positive, add a cast node to make them explicit
-  for (auto arg : {&from, &to, &length}) {
-    jlong high = _gvn.type(*arg)->is_integer(bt)->hi_as_long();
-    Node* casted = ConstraintCastNode::make_cast_for_basic_type(
-        control(), *arg, TypeInteger::make(0, high, Type::WidenMax, bt),
-        ConstraintCastNode::UnconditionalDependency, bt);
-    casted = _gvn.transform(casted);
-    replace_in_map(*arg, casted);
-    *arg = casted;
-  }
-
-  // (2) Unsigned comparison for the `to` range check: to u<= length
-  {
-    Node* rc_cmp = _gvn.transform(CmpNode::make(to, length, bt, true));
-    BoolTest::mask btest = BoolTest::le;
-    Node* rc_bool = _gvn.transform(new BoolNode(rc_cmp, btest));
-    RangeCheckNode* rc = new RangeCheckNode(control(), rc_bool, PROB_MAX, COUNT_UNKNOWN);
-    _gvn.set_type(rc, rc->Value(&_gvn));
-    if (!rc_bool->is_Con()) {
-      record_for_igvn(rc);
-    }
-
-    set_control(_gvn.transform(new IfTrueNode(rc)));
-
-    // Branch to slow path
-    {
-      PreserveJVMState pjvms(this);
-      set_control(_gvn.transform(new IfFalseNode(rc)));
-      uncommon_trap(Deoptimization::Reason_range_check,
-                    Deoptimization::Action_make_not_entrant);
-    }
-
-    if (stopped()) {
-      // Range check is known to always fail during compilation and the IR graph so far constructed is good so return success
-      return true;
-    }
-
-    // (2.1) 'to' is now known to be >= 0 and < length, cast it
-    jlong hi_length = _gvn.type(length)->is_integer(bt)->hi_as_long();
-    Node* result = ConstraintCastNode::make_cast_for_basic_type(
-      control(),
-      to,
-      TypeInteger::make(0, hi_length, Type::WidenMax, bt),
-        ConstraintCastNode::UnconditionalDependency, bt);
-    result = _gvn.transform(result);
-
-    replace_in_map(to, result);
-    to = result;
-  }
-
-  // (3) Unsigned comparison for the 'from' range check: from u<= to
-  {
-    // We verified range check de-optimize before, but check again because two range checks will be generated for the
-    // current method (i.e., 'from' and 'to'). We potentially de-optimize for 'to' here.
-    if (too_many_traps(Deoptimization::Reason_range_check)) {
-      return true;
-    }
-
-    Node* rc_cmp = _gvn.transform(CmpNode::make(from, to, bt, true));
-    BoolTest::mask btest = BoolTest::le;
-    Node* rc_bool = _gvn.transform(new BoolNode(rc_cmp, btest));
-    RangeCheckNode* rc = new RangeCheckNode(control(), rc_bool, PROB_MAX, COUNT_UNKNOWN);
-    _gvn.set_type(rc, rc->Value(&_gvn));
-    if (!rc_bool->is_Con()) {
-      record_for_igvn(rc);
-    }
-
-    set_control(_gvn.transform(new IfTrueNode(rc)));
-
-    // Branch to slow path
-    {
-      PreserveJVMState pjvms(this);
-      set_control(_gvn.transform(new IfFalseNode(rc)));
-      uncommon_trap(Deoptimization::Reason_range_check,
-                    Deoptimization::Action_make_not_entrant);
-    }
-
-    if (stopped()) {
-      // Range check is known to always fail during compilation and the IR graph so far constructed is good so return
-      // success
-      return true;
-    }
-
-    // (3.1) 'from' is now known to be >= 0 and <= to, cast it
-    jlong hi_to = _gvn.type(to)->is_integer(bt)->hi_as_long();
-    Node* result = ConstraintCastNode::make_cast_for_basic_type(control(),
-      from, TypeInteger::make(0, hi_to, Type::WidenMax, bt),
-        ConstraintCastNode::UnconditionalDependency, bt);
-    result = _gvn.transform(result);
-
-    // function subgraph returns 'from'
-    set_result(result);
-
-    replace_in_map(from, result);
-    from = result;
-  }
-
-  return true;
+  return inline_preconditions_checkFromToIndex_helper(from, to, length, bt);
 }
 
 bool LibraryCallKit::inline_preconditions_checkIndex(BasicType bt) {
@@ -1560,18 +1294,20 @@ bool LibraryCallKit::inline_preconditions_checkIndex(BasicType bt) {
   // Check that length is positive
   length = insert_positive_check(*this, length, bt);
   if (length == nullptr) {
-    // Length is known to be always negative during compilation and the IR graph so far constructed is good so return success
+    // Length is known to be always negative during compilation and the IR graph so far constructed is good so return
+    // success
     return true;
   }
 
   // Use an unsigned comparison for the range check itself
-  Node* result = insert_unsigned_range_check(*this, index, length, BoolTest::lt, bt);
-  if (result == nullptr) {
-    // Range check is known to always fail during compilation and the IR graph so far constructed is good so return success
+  index = insert_unsigned_range_check(*this, index, length, BoolTest::lt, bt);
+  if (index == nullptr) {
+    // Range check is known to always fail during compilation and the IR graph so far constructed is good so return
+    // success
     return true;
   }
 
-  set_result(result);
+  set_result(index);
   return true;
 }
 

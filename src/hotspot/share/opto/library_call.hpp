@@ -268,7 +268,7 @@ class LibraryCallKit : public GraphKit {
   bool inline_native_getLength();
   bool inline_array_copyOf(bool is_copyOfRange);
   bool inline_array_equals(StrIntrinsicNode::ArgEnc ae);
-  bool inline_preconditions_checkIndex_helper(Node* from, Node* to, Node* size, Node* length, BasicType bt);
+  bool inline_preconditions_checkFromToIndex_helper(Node* from, Node* to, Node* length, BasicType bt);
   bool inline_preconditions_checkIndex(BasicType bt);
   bool inline_preconditions_checkFromToIndex(BasicType bt);
   bool inline_preconditions_checkFromIndexSize(BasicType bt);
