@@ -1178,6 +1178,8 @@ Node* insert_positive_check(LibraryCallKit& kit, Node* target, BasicType bt) {
 }
 
 Node* insert_unsigned_range_check(LibraryCallKit& kit, Node* lhs, Node* rhs, BoolTest::mask mask, BasicType bt) {
+  assert(mask == BoolTest::lt || mask == BoolTest::le, "");
+
   PhaseGVN& gvn = kit.gvn();
 
   // Unsigned comparison itself
@@ -1206,7 +1208,7 @@ Node* insert_unsigned_range_check(LibraryCallKit& kit, Node* lhs, Node* rhs, Boo
   }
 
   // 'lhs' is now known to be < or <= 'rhs', so cast its type to be more specific.
-  jlong lo_lhs = gvn.type(lhs)->is_integer(bt)->lo_as_long();
+  jlong lo_lhs = 0; // implied from unsigned comparisons
   jlong hi_rhs = gvn.type(rhs)->is_integer(bt)->hi_as_long();
   assert(lo_lhs <= hi_rhs, "");
 
@@ -1252,7 +1254,7 @@ bool LibraryCallKit::inline_preconditions_checkFromToIndex_helper(Node* from, No
   }
 
   // Unsigned comparison for 'to u<= length'
-  to = insert_unsigned_range_check(*this, to, to, BoolTest::le, bt);
+  to = insert_unsigned_range_check(*this, to, length, BoolTest::le, bt);
   if  (to == nullptr) {
     return true; // `to` is always greater than `length`
   }
@@ -1262,6 +1264,10 @@ bool LibraryCallKit::inline_preconditions_checkFromToIndex_helper(Node* from, No
 }
 
 bool LibraryCallKit::inline_preconditions_checkFromIndexSize(BasicType bt) {
+  // if (!UseNewCode) {
+  //   return false;
+  // }
+
   // (IIILjava/util/function/BiFunction;)I]: (0: from),   (1: size),   (2: length),   (3: biFunction)
   // (JJJLjava/util/function/BiFunction;)J]: (0-1: from), (2-3: size), (4-5: length), (6: biFunction)
   Node* from = argument(0);
@@ -1274,6 +1280,10 @@ bool LibraryCallKit::inline_preconditions_checkFromIndexSize(BasicType bt) {
 }
 
 bool LibraryCallKit::inline_preconditions_checkFromToIndex(BasicType bt) {
+  // if (!UseNewCode) {
+  //   return false;
+  // }
+
   // (IIILjava/util/function/BiFunction;)I]: (0: from),   (1: to),   (2: length),   (3: biFunction)
   // (JJJLjava/util/function/BiFunction;)J]: (0-1: from), (2-3: to), (4-5: length), (6: biFunction)
   Node* from = argument(0);
@@ -1284,6 +1294,69 @@ bool LibraryCallKit::inline_preconditions_checkFromToIndex(BasicType bt) {
 }
 
 bool LibraryCallKit::inline_preconditions_checkIndex(BasicType bt) {
+  // if (!UseNewCode) {
+  //     Node* index = argument(0);
+  //     Node* length = bt == T_INT ? argument(1) : argument(2);
+  //     if (too_many_traps(Deoptimization::Reason_intrinsic) || too_many_traps(Deoptimization::Reason_range_check)) {
+  //       return false;
+  //     }
+  //
+  //     // check that length is positive
+  //     Node* len_pos_cmp = _gvn.transform(CmpNode::make(length, integercon(0, bt), bt));
+  //     Node* len_pos_bol = _gvn.transform(new BoolNode(len_pos_cmp, BoolTest::ge));
+  //
+  //     {
+  //       BuildCutout unless(this, len_pos_bol, PROB_MAX);
+  //       uncommon_trap(Deoptimization::Reason_intrinsic,
+  //                     Deoptimization::Action_make_not_entrant);
+  //     }
+  //
+  //     if (stopped()) {
+  //       // Length is known to be always negative during compilation and the IR graph so far constructed is good so return success
+  //       return true;
+  //     }
+  //
+  //     // length is now known positive, add a cast node to make this explicit
+  //     jlong upper_bound = _gvn.type(length)->is_integer(bt)->hi_as_long();
+  //     Node* casted_length = ConstraintCastNode::make_cast_for_basic_type(
+  //         control(), length, TypeInteger::make(0, upper_bound, Type::WidenMax, bt),
+  //         ConstraintCastNode::RegularDependency, bt);
+  //     casted_length = _gvn.transform(casted_length);
+  //     replace_in_map(length, casted_length);
+  //     length = casted_length;
+  //
+  //     // Use an unsigned comparison for the range check itself
+  //     Node* rc_cmp = _gvn.transform(CmpNode::make(index, length, bt, true));
+  //     BoolTest::mask btest = BoolTest::lt;
+  //     Node* rc_bool = _gvn.transform(new BoolNode(rc_cmp, btest));
+  //     RangeCheckNode* rc = new RangeCheckNode(control(), rc_bool, PROB_MAX, COUNT_UNKNOWN);
+  //     _gvn.set_type(rc, rc->Value(&_gvn));
+  //     if (!rc_bool->is_Con()) {
+  //       record_for_igvn(rc);
+  //     }
+  //     set_control(_gvn.transform(new IfTrueNode(rc)));
+  //     {
+  //       PreserveJVMState pjvms(this);
+  //       set_control(_gvn.transform(new IfFalseNode(rc)));
+  //       uncommon_trap(Deoptimization::Reason_range_check,
+  //                     Deoptimization::Action_make_not_entrant);
+  //     }
+  //
+  //     if (stopped()) {
+  //       // Range check is known to always fail during compilation and the IR graph so far constructed is good so return success
+  //       return true;
+  //     }
+  //
+  //     // index is now known to be >= 0 and < length, cast it
+  //     Node* result = ConstraintCastNode::make_cast_for_basic_type(
+  //         control(), index, TypeInteger::make(0, upper_bound, Type::WidenMax, bt),
+  //         ConstraintCastNode::RegularDependency, bt);
+  //     result = _gvn.transform(result);
+  //     set_result(result);
+  //     replace_in_map(index, result);
+  //     return true;
+  // }
+
   Node* index = argument(0);
   Node* length = bt == T_INT ? argument(1) : argument(2);
 
