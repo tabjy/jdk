@@ -1196,9 +1196,21 @@ Node* insert_unsigned_range_check(LibraryCallKit& kit, Node* lhs, Node* rhs, Boo
 
   PhaseGVN& gvn = kit.gvn();
 
+  // Range check elimination only works with strictly < (BoolTest::lt), not <= (BoolTest::le); therefore, we preform the
+  // logical equivalent:
+  //     lhs <= rhs ---> lhs < (rhs + 1)
+  //
+  // Since we know `rhs` necessarily satisfies:
+  //     0 <= rhs <= (signed) MAX_VALUE
+  //
+  // When interpreted as unsigned, `rhs` won't overflow.
+  if (mask == BoolTest::le) {
+    rhs = gvn.transform(AddNode::make(rhs, gvn.integercon(1, bt), bt));
+  }
+
   // Unsigned comparison itself
   Node* rc_cmp = gvn.transform(CmpNode::make(lhs, rhs, bt, true));
-  Node* rc_bool = gvn.transform(new BoolNode(rc_cmp, mask));
+  Node* rc_bool = gvn.transform(new BoolNode(rc_cmp, BoolTest::lt));
   RangeCheckNode* rc = new RangeCheckNode(kit.control(), rc_bool, PROB_MAX, COUNT_UNKNOWN);
   gvn.set_type(rc, rc->Value(&gvn));
   if (!rc_bool->is_Con()) {
