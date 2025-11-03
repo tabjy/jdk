@@ -2005,8 +2005,19 @@ bool CountedLoopConverter::stress_long_counted_loop() {
 #endif
 
 bool PhaseIdealLoop::try_convert_to_counted_loop(Node* head, IdealLoopTree*& loop, const BasicType iv_bt) {
+  FILE* log;
+  if (UseNewCode) {
+    log = fopen ("/tmp/counted_loops.txt","a");
+    fprintf(log, "%s::%s, ", ciEnv::current()->Class_klass()->name()->as_quoted_ascii(), C->method()->name()->as_quoted_ascii());
+  }
+
   CountedLoopConverter converter(this, head, loop, iv_bt);
   if (converter.is_counted_loop()) {
+    if (UseNewCode) {
+      fprintf(log, "yes\n");
+      fclose(log);
+    }
+
 #ifdef ASSERT
     // Stress by converting int counted loops to long counted loops
     if (converter.should_stress_long_counted_loop() && converter.stress_long_counted_loop()) {
@@ -2018,6 +2029,10 @@ bool PhaseIdealLoop::try_convert_to_counted_loop(Node* head, IdealLoopTree*& loo
     return true;
   }
 
+  if (UseNewCode) {
+    fprintf(log, "yes\n");
+    fclose(log);
+  }
   return false;
 }
 
