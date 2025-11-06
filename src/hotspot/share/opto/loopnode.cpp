@@ -3009,7 +3009,7 @@ bool PhaseIdealLoop::try_convert_to_counted_loop(Node* head, IdealLoopTree*& loo
 
   CountedLoopConverter converter(this, head, loop, iv_bt);
   if (converter.is_counted_loop()) {
-    if (UseNewCode) {
+    if (UseNewCode || true) {
       bool old_loop_detected = is_counted_loop_old(head, loop, iv_bt);
       assert(old_loop_detected, "must be");
       return true;
@@ -3032,7 +3032,7 @@ bool PhaseIdealLoop::try_convert_to_counted_loop(Node* head, IdealLoopTree*& loo
     return true;
   }
 
-  if (UseNewCode) {
+  if (UseNewCode  || true) {
     bool old_loop_detected = is_counted_loop_old(head, loop, iv_bt);
     assert(!old_loop_detected, "must not be");
     return false;
