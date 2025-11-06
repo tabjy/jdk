@@ -1374,6 +1374,8 @@ public:
 
   Node* loop_exit_control(const Node* head, const IdealLoopTree* loop) const;
 
+  bool is_counted_loop_old(Node* x, IdealLoopTree*&loop, BasicType iv_bt);
+
   class LoopExitTest {
     bool _is_valid = false;
 
