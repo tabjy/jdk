@@ -1200,7 +1200,7 @@ Node* insert_unsigned_range_check(LibraryCallKit& kit, Node* lhs, Node* rhs, Boo
   // logical equivalent:
   //     lhs <= rhs ---> lhs < (rhs + 1)
   //
-  // Since we know `rhs` necessarily satisfies:
+  // Since we already know `rhs` is a signed positive, that is, it necessarily satisfies:
   //     0 <= rhs <= (signed) MAX_VALUE
   //
   // When interpreted as unsigned, `rhs` won't overflow.
@@ -1249,7 +1249,8 @@ Node* insert_unsigned_range_check(LibraryCallKit& kit, Node* lhs, Node* rhs, Boo
 
 // checkFromToIndex  (from, to,   length, ...): !(from < 0 || from > to || to > length)
 //                                           => from >= 0 && from <= to && to <= length
-bool LibraryCallKit::inline_preconditions_checkFromToIndex_helper(Node* from, Node* to, Node* length, BasicType bt) {
+bool LibraryCallKit::inline_preconditions_checkFromToIndex_helper(Node* from, Node* to, Node* size, Node* length, BasicType bt) {
+  assert((to == nullptr) ^ (size == nullptr), "must set one and one only");
   assert(bt == T_INT || bt == T_LONG, "");
 
   if (too_many_traps(Deoptimization::Reason_intrinsic) || too_many_traps(Deoptimization::Reason_range_check)) {
@@ -1260,7 +1261,12 @@ bool LibraryCallKit::inline_preconditions_checkFromToIndex_helper(Node* from, No
   // (from|to|length) >= 0 or (from|size|length) >= 0, we're checking them separately to allow branch elimination in
   // case only one or two of them can be deduced.
   from = insert_positive_check(*this, from, bt);
-  to = insert_positive_check(*this, to, bt);
+  if (to != nullptr) {
+    to = insert_positive_check(*this, to, bt);
+  }
+  if (size != nullptr) {
+    size = insert_positive_check(*this, size, bt);
+  }
   length = insert_positive_check(*this, length, bt);
 
   if (stopped()) {
@@ -1269,17 +1275,51 @@ bool LibraryCallKit::inline_preconditions_checkFromToIndex_helper(Node* from, No
     return true;
   }
 
-  // Unsigned comparison for 'from u<= to'
-  from = insert_unsigned_range_check(*this, from, to, BoolTest::le, bt);
+  // Since `length` is likely the loop invariant. We want to compare possible variant to it as much as possible so
+  // comparisons can be hoisted outside the loop or to pre/post loops.
+
+  // 1) for checkFromToIndex(from, to, length)
+  //    a) from u<= length
+  //    b) from u<= to
+  //    c) to   u<= length
+
+
+  // 2) for checkFromIndexSize(from, size, length)
+  //    a) from        u<= length
+  //    b) size        >=0 (known from positive checks above)
+  //    c) from + size u<= length
+
+  // (1a) (2a): from u<= length
+  // We have checked there could be at least one more range check trap
+  from = insert_unsigned_range_check(*this, from, length, BoolTest::le, bt);
   if (from == nullptr) {
-    return true; // `from` is always greater than `to`
+    return true; // `from` is always greater than `length`
   }
 
-  if (too_many_traps(Deoptimization::Reason_range_check)) { // We can insert the second trap?
+  // (1b): from u<= to
+
+  if (size != nullptr) {
+    // FIXME: actually are we using range check at all for this comparison?
+    if (too_many_traps(Deoptimization::Reason_range_check)) { // We can insert the second trap?
+      return false;
+    }
+
+    // TODO
+    from = insert_unsigned_range_check(*this, from, to, BoolTest::le, bt);
+    if (from == nullptr) {
+      return true; // `from` is always greater than `length`
+    }
+  }
+
+
+  // (1c) (2c): `to u<= length` or `from + size u<= length`
+  if (too_many_traps(Deoptimization::Reason_range_check)) { // We can insert the one more trap?
     return false;
   }
 
-  // Unsigned comparison for 'to u<= length'
+  if (to == nullptr) {
+    to = _gvn.transform(AddNode::make(from, size, bt));
+  }
   to = insert_unsigned_range_check(*this, to, length, BoolTest::le, bt);
   if  (to == nullptr) {
     return true; // `to` is always greater than `length`
@@ -1300,9 +1340,9 @@ bool LibraryCallKit::inline_preconditions_checkFromIndexSize(BasicType bt) {
   Node* size = bt == T_INT ? argument(1) : argument(2);
   Node* length = bt == T_INT ? argument(2) : argument(4);
 
-  Node* to = _gvn.transform(AddNode::make(from, size, bt));
+  // Node* to = _gvn.transform(AddNode::make(from, size, bt));
 
-  return inline_preconditions_checkFromToIndex_helper(from, to, length, bt);
+  return inline_preconditions_checkFromToIndex_helper(from, nullptr, size, length, bt);
 }
 
 bool LibraryCallKit::inline_preconditions_checkFromToIndex(BasicType bt) {
@@ -1316,7 +1356,7 @@ bool LibraryCallKit::inline_preconditions_checkFromToIndex(BasicType bt) {
   Node* to = bt == T_INT ? argument(1) : argument(2);
   Node* length = bt == T_INT ? argument(2) : argument(4);
 
-  return inline_preconditions_checkFromToIndex_helper(from, to, length, bt);
+  return inline_preconditions_checkFromToIndex_helper(from, to, nullptr, length, bt);
 }
 
 bool LibraryCallKit::inline_preconditions_checkIndex(BasicType bt) {
