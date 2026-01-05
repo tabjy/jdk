@@ -1260,6 +1260,7 @@ bool LibraryCallKit::inline_preconditions_checkFromToIndex_helper(Node* from, No
   // Check that all arguments are positive. Note that even the following are logically equivalent to
   // (from|to|length) >= 0 or (from|size|length) >= 0, we're checking them separately to allow branch elimination in
   // case only one or two of them can be deduced.
+  // FIXME: from >= 0 not needed if from u<= length is true
   from = insert_positive_check(*this, from, bt);
   if (to != nullptr) {
     to = insert_positive_check(*this, to, bt);

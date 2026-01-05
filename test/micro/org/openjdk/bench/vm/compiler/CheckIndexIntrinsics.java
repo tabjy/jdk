@@ -29,6 +29,17 @@ import org.openjdk.jmh.infra.Blackhole;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * Benchmark to measure the performance impact of intrinsified checkFromIndexSize.
+ *
+ * This mimics the Vert.x BufferImpl pattern where:
+ * - BufferImpl.getByte(pos) does ONE bounds check via checkUpperBound()
+ * - Then delegates to Netty's ByteBuf.getByte() which does NO explicit bounds check
+ *   (only the implicit JVM array bounds check)
+ *
+ * The key insight is that Vert.x has a SINGLE explicit bounds check per operation,
+ * not multiple layered checks.
+ */
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.NANOSECONDS)
 @State(Scope.Benchmark)
@@ -40,71 +51,101 @@ public class CheckIndexIntrinsics {
     @Param({"64"})
     private int batchSize;
 
-    private static class UnintrinsifiedBondCheckBuffer {
-        private byte[] buffer = new byte[1024];
+    // Buffers created in @Setup to match Vert.x benchmark structure
+    private UnintrinsifiedBuffer unintrinsifiedBuffer;
+    private IntrinsifiedBuffer intrinsifiedBuffer;
 
-        public byte getByte(int pos) {
-            checkUpperBound(pos, 1);
-            return _getByte(pos);
-        }
+    @Setup
+    public void setup() {
+        // Match Vert.x: buffer size == batchSize (loop bound)
+        unintrinsifiedBuffer = new UnintrinsifiedBuffer(batchSize);
+        intrinsifiedBuffer = new IntrinsifiedBuffer(batchSize);
 
-        private void checkUpperBound(int index, int size) {
-            int length = buffer.length;
-            if ((index | length - (index + size)) < 0) { // vertx
-                throw new RuntimeException("oob");
-            }
-        }
-
-        private byte _getByte(int pos) {
-            checkIndex(pos, 1);
-            return buffer[pos];
-        }
-
-        private void checkIndex(int index, int size) {
-            unintrinsifiedCheckFromIndexSize(index, size, buffer.length);
-        }
-
-        // Mimicking non-intrinsified bytecode from as in jdk.internal.util.Preconditions
-        private static int unintrinsifiedCheckFromIndexSize(int fromIndex, int size, int length) {
-            if ((length | fromIndex | size) < 0 || size > length - fromIndex) // netty
-                throw new RuntimeException("oob");
-            return fromIndex;
+        // Initialize with data
+        for (int i = 0; i < batchSize; i++) {
+            unintrinsifiedBuffer.setByte(i, (byte) i);
+            intrinsifiedBuffer.setByte(i, (byte) i);
         }
     }
 
-    private static class IntrinsifiedBondCheckBuffer {
-        private byte[] buffer = new byte[1024];
+    /**
+     * Mimics Vert.x BufferImpl with unintrinsified bounds check.
+     * Uses the same pattern as Vert.x: checkUpperBound() before array access.
+     */
+    private static class UnintrinsifiedBuffer {
+        private final byte[] buffer;
+        private int writerIndex;  // Mimics ByteBuf.writerIndex()
+
+        UnintrinsifiedBuffer(int size) {
+            buffer = new byte[size];
+            writerIndex = size;
+        }
 
         public byte getByte(int pos) {
-            checkUpperBound(pos, 1); // vertx
-            return _getByte(pos);
+            // Vert.x style: ONE bounds check, then direct array access
+            checkUpperBound(pos, 1);
+            return buffer[pos];  // Netty's HeapByteBufUtil.getByte() - no explicit check
         }
 
+        public void setByte(int pos, byte b) {
+            buffer[pos] = b;
+            if (pos >= writerIndex) {
+                writerIndex = pos + 1;
+            }
+        }
+
+        // Mimics Vert.x BufferImpl.checkUpperBound - unintrinsified version
         private void checkUpperBound(int index, int size) {
-            Objects.checkFromIndexSize(index, size, buffer.length);
+            int length = writerIndex;  // writerIndex() call in real Vert.x
+            if (index < 0 || index + size < 0 || index + size > length) {
+                throw new IndexOutOfBoundsException(index + " + " + size + " > " + length);
+            }
+        }
+    }
+
+    /**
+     * Mimics Vert.x BufferImpl with intrinsified bounds check.
+     * Uses Objects.checkFromIndexSize() which should be intrinsified.
+     */
+    private static class IntrinsifiedBuffer {
+        private final byte[] buffer;
+        private int writerIndex;
+
+        IntrinsifiedBuffer(int size) {
+            buffer = new byte[size];
+            writerIndex = size;
         }
 
-        private byte _getByte(int pos) {
-            checkIndex(pos, 1); // netty
+        public byte getByte(int pos) {
+            // Same pattern but using intrinsified check
+            checkUpperBound(pos, 1);
             return buffer[pos];
         }
 
-        private void checkIndex(int index, int size) {
-            Objects.checkFromIndexSize(index, size, buffer.length);
+        public void setByte(int pos, byte b) {
+            buffer[pos] = b;
+            if (pos >= writerIndex) {
+                writerIndex = pos + 1;
+            }
+        }
+
+        // Uses intrinsified Objects.checkFromIndexSize
+        private void checkUpperBound(int index, int size) {
+            Objects.checkFromIndexSize(index, size, writerIndex);
         }
     }
 
     @Benchmark
     public void getByteBatchUnintrinsified(Blackhole bh) {
-        UnintrinsifiedBondCheckBuffer buffer = new UnintrinsifiedBondCheckBuffer();
+        UnintrinsifiedBuffer buffer = this.unintrinsifiedBuffer;
         for (int i = 0, size = batchSize; i < size; i++) {
-            bh.consume(buffer.getByte(i)); // TODO:
+            bh.consume(buffer.getByte(i));
         }
     }
 
     @Benchmark
     public void getByteBatchIntrinsified(Blackhole bh) {
-        IntrinsifiedBondCheckBuffer buffer = new IntrinsifiedBondCheckBuffer();
+        IntrinsifiedBuffer buffer = this.intrinsifiedBuffer;
         for (int i = 0, size = batchSize; i < size; i++) {
             bh.consume(buffer.getByte(i));
         }
