@@ -193,11 +193,13 @@ public class TestCheckIndexIntrinsics {
     }
 
     @Run(test = {
-            "testUnintrinsifiedCheckFromToIndex",
+            "testCheckFromIndexSize",
+//             "testUnintrinsifiedCheckFromToIndex",
             "testCheckFromToIndex"
     })
     private void testCheckFromToIndex_runner() {
 //         testUnintrinsifiedCheckFromToIndex(0, 100, 210, 0, 10);
+        testCheckFromIndexSize(0, 100, 210, 0, 10);
         testCheckFromToIndex(0, 100, 210, 0, 10);
     }
 }

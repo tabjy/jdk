@@ -1238,6 +1238,7 @@ Node* insert_unsigned_range_check(LibraryCallKit& kit, Node* lhs, Node* rhs, Boo
   jlong hi_rhs = gvn.type(rhs)->is_integer(bt)->hi_as_long();
   assert(lo_lhs <= hi_rhs, "");
 
+  // FIXME: try removing casts
   Node* result = ConstraintCastNode::make_cast_for_basic_type(
       kit.control(), lhs, TypeInteger::make(lo_lhs, hi_rhs, Type::WidenMax, bt),
         ConstraintCastNode::RegularDependency, bt);
@@ -1261,7 +1262,7 @@ bool LibraryCallKit::inline_preconditions_checkFromToIndex_helper(Node* from, No
   // (from|to|length) >= 0 or (from|size|length) >= 0, we're checking them separately to allow branch elimination in
   // case only one or two of them can be deduced.
   // FIXME: from >= 0 not needed if from u<= length is true
-  from = insert_positive_check(*this, from, bt);
+  // from = insert_positive_check(*this, from, bt);
   if (to != nullptr) {
     to = insert_positive_check(*this, to, bt);
   }
@@ -1299,11 +1300,14 @@ bool LibraryCallKit::inline_preconditions_checkFromToIndex_helper(Node* from, No
 
   // (1b): from u<= to
 
-  if (size != nullptr) {
+  if (size == nullptr) {
     // FIXME: actually are we using range check at all for this comparison?
     if (too_many_traps(Deoptimization::Reason_range_check)) { // We can insert the second trap?
       return false;
     }
+
+    // TODO
+    // from = from->uncast();
 
     // TODO
     from = insert_unsigned_range_check(*this, from, to, BoolTest::le, bt);
