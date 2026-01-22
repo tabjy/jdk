@@ -1182,13 +1182,12 @@ Node* insert_positive_check(LibraryCallKit& kit, Node* target, BasicType bt) {
 
   // target is now known positive, add a cast node to make this explicit
   jlong upper_bound = gvn.type(target)->is_integer(bt)->hi_as_long();
+
+  // FIXME: why is this casting inside main loop?
   Node* casted = ConstraintCastNode::make_cast_for_basic_type(
       kit.control(), target, TypeInteger::make(0, upper_bound, Type::WidenMax, bt),
       ConstraintCastNode::RegularDependency, bt);
-  casted = gvn.transform(casted);
-  kit.replace_in_map(target, casted);
-
-  return casted;
+  return gvn.transform(casted);
 }
 
 Node* insert_unsigned_range_check(LibraryCallKit& kit, Node* lhs, Node* rhs, BoolTest::mask mask, BasicType bt) {
@@ -1239,13 +1238,15 @@ Node* insert_unsigned_range_check(LibraryCallKit& kit, Node* lhs, Node* rhs, Boo
   assert(lo_lhs <= hi_rhs, "");
 
   // FIXME: try removing casts
+  // return  lhs;
+
   Node* result = ConstraintCastNode::make_cast_for_basic_type(
       kit.control(), lhs, TypeInteger::make(lo_lhs, hi_rhs, Type::WidenMax, bt),
         ConstraintCastNode::RegularDependency, bt);
-  result = gvn.transform(result);
+  // result = gvn.transform(result);
+  return gvn.transform(result);
 
-  kit.replace_in_map(lhs, result);
-  return result;
+  // kit.replace_in_map(lhs, result);
 }
 
 // checkFromToIndex  (from, to,   length, ...): !(from < 0 || from > to || to > length)
@@ -1258,22 +1259,27 @@ bool LibraryCallKit::inline_preconditions_checkFromToIndex_helper(Node* from, No
     return false;
   }
 
+  // Save type improved nodes without replacing in state map just yet, as they interfere with range check eliminations.
+  Node* casted_from = nullptr;
+  Node* casted_to = nullptr;
+  Node* casted_size = nullptr;
+  Node* casted_length = nullptr;
+
   // Check that all arguments are positive. Note that even the following are logically equivalent to
   // (from|to|length) >= 0 or (from|size|length) >= 0, we're checking them separately to allow branch elimination in
   // case only one or two of them can be deduced.
-  // FIXME: from >= 0 not needed if from u<= length is true
-  // from = insert_positive_check(*this, from, bt);
+  // Note: we don't need to explicitly check `from >= 0` is positive since `from u<= length` later implies it.
   if (to != nullptr) {
-    to = insert_positive_check(*this, to, bt);
+    casted_to = insert_positive_check(*this, to, bt);
   }
   if (size != nullptr) {
-    size = insert_positive_check(*this, size, bt);
+    casted_size = insert_positive_check(*this, size, bt);
   }
-  length = insert_positive_check(*this, length, bt);
+  casted_length = insert_positive_check(*this, length, bt);
 
   if (stopped()) {
-    // One argument is known to be always negative during compilation and the IR graph so far constructed is good so
-    // return success.
+    // At least one argument is known to be always negative during compilation and the IR graph so far constructed is
+    // good so return success.
     return true;
   }
 
@@ -1285,6 +1291,7 @@ bool LibraryCallKit::inline_preconditions_checkFromToIndex_helper(Node* from, No
   //    b) from u<= to
   //    c) to   u<= length
 
+  // `from <= size + from` skip for checkFromIndexSize
 
   // 2) for checkFromIndexSize(from, size, length)
   //    a) from        u<= length
@@ -1293,26 +1300,36 @@ bool LibraryCallKit::inline_preconditions_checkFromToIndex_helper(Node* from, No
 
   // (1a) (2a): from u<= length
   // We have checked there could be at least one more range check trap
-  from = insert_unsigned_range_check(*this, from, length, BoolTest::le, bt);
-  if (from == nullptr) {
-    return true; // `from` is always greater than `length`
+
+  // We don't want to use `casted_length` for range checks since range check elimination cannot pick up this pattern.
+  casted_from = insert_unsigned_range_check(*this, from, length, BoolTest::le, bt);
+  if (casted_from == nullptr) {
+    return true; // `from` is known always greater than `length` during compilation.
   }
 
   // (1b): from u<= to
 
-  if (size == nullptr) {
+  if (to != nullptr) {
     // FIXME: actually are we using range check at all for this comparison?
     if (too_many_traps(Deoptimization::Reason_range_check)) { // We can insert the second trap?
       return false;
     }
 
-    // TODO
+    // TODO: try removing casting to allow range check elimination
     // from = from->uncast();
 
-    // TODO
-    from = insert_unsigned_range_check(*this, from, to, BoolTest::le, bt);
-    if (from == nullptr) {
-      return true; // `from` is always greater than `length`
+    // java src: int to = from + size
+    // casted_from = insert_unsigned_range_check(*this, from, to, BoolTest::le, bt);
+    // TODO: instead of range check `from <= to`, we range check `0 <= from - to` or `-1 < from - to` since it's more
+    // likely to be constant propagated.
+    Node* subtracted_size = _gvn.transform(SubNode::make(to, from, bt));
+    insert_unsigned_range_check(*this, _gvn.zerocon(bt), subtracted_size, BoolTest::le, bt);
+    if (stopped()) {
+      return true; // `to` is always less than ``from`
+    }
+
+    if (casted_from == nullptr) {
+      return true; // `from` is always greater than `length`.
     }
   }
 
@@ -1325,12 +1342,25 @@ bool LibraryCallKit::inline_preconditions_checkFromToIndex_helper(Node* from, No
   if (to == nullptr) {
     to = _gvn.transform(AddNode::make(from, size, bt));
   }
-  to = insert_unsigned_range_check(*this, to, length, BoolTest::le, bt);
-  if  (to == nullptr) {
-    return true; // `to` is always greater than `length`
+
+  // Similarly, use the original, uncasted `to` and `length` for range checks.
+  casted_to = insert_unsigned_range_check(*this, to, length, BoolTest::le, bt);
+  if  (casted_to == nullptr) {
+    return true; // `to` is always greater than `length`.
   }
 
-  set_result(from);
+  set_result(casted_from); // Finally, set return value.
+
+  replace_in_map(from, casted_from);
+  if (casted_to != nullptr) {
+    replace_in_map(to, casted_to);
+  }
+  if (casted_size != nullptr) {
+    replace_in_map(size, casted_size);
+  }
+  replace_in_map(length, casted_length);
+
+
   return true;
 }
 

@@ -37,7 +37,6 @@ import java.util.Objects;
 public class TestCheckIndexIntrinsics {
     public static void main(String[] args) {
         // TODO: remove PrintIdeal flag
-        // TODO: w/wo -XX:ShortRunningLongLoop?
         TestFramework.runWithFlags("-XX:PrintIdealGraphLevel=2", "-XX:CompileOnly=compiler.c2.irTests.TestCheckIndexIntrinsics::*", "-XX:LoopMaxUnroll=0");
     }
 
@@ -80,103 +79,92 @@ public class TestCheckIndexIntrinsics {
     }
 
     // TODO: re-enable tests
-//    // Controlled test without intrinsics, should not have range checks (and traps) to begin with.
-//    @Test
-//    @IR(counts = { IRNode.COUNTED_LOOP, ">= 1"})
-//    @IR(failOn = { IRNode.RANGE_CHECK_TRAP })
-//    public static void testUnintrinsifiedCheckIndex(int start, int stop, int length, int offset) {
-//        final int scale = 2;
-//        final int stride = 1;
-//
-//        for (int i = start; i < stop; i += stride) {
-//            unintrinsifiedCheckIndex(scale * i + offset, length);
-//        }
-//    }
-//
-//    // Same but for longs
-//    @Test
-//    @IR(counts = { IRNode.COUNTED_LOOP, ">= 1"})
-//    @IR(failOn = { IRNode.RANGE_CHECK_TRAP })
-//    public static void testUnintrinsifiedCheckIndexL(long start, long stop, long length, long offset) {
-//        final long scale = 2;
-//        final long stride = 1;
-//
-//        for (long i = start; i < stop; i += stride) {
-//            unintrinsifiedCheckIndexL(scale * i + offset, length);
-//        }
-//    }
-//
-//    // Test range check (and trap) successfully eliminated
-//    @Test
-//    @IR(failOn = { IRNode.COUNTED_LOOP })
-//    @IR(counts = { IRNode.RANGE_CHECK_TRAP, "1" }, phase = CompilePhase.AFTER_PARSING)
-//    @IR(failOn = { IRNode.RANGE_CHECK_TRAP }) // phase = CompilePhase.BEFORE_MATCHING
-//    public static void testCheckIndex(int start, int stop, int length, int offset) {
-//        final int scale = 2;
-//        final int stride = 1;
-//
-//        for (int i = start; i < stop; i += stride) {
-//            Objects.checkIndex(scale * i + offset, length);
-//        }
-//    }
-//
-//    // Same but for longs
-//    @Test
-//    @IR(failOn = { IRNode.COUNTED_LOOP })
-//    @IR(counts = { IRNode.RANGE_CHECK_TRAP, "1" }, phase = CompilePhase.AFTER_PARSING)
-//    @IR(failOn = { IRNode.RANGE_CHECK_TRAP }) // phase = CompilePhase.BEFORE_MATCHING
-//    public static void testCheckIndexL(long start, long stop, long length, long offset) {
-//        final long scale = 2;
-//        final long stride = 1;
-//
-//        for (long i = start; i < stop; i += stride) {
-//            Objects.checkIndex(scale * i + offset, length);
-//        }
-//    }
-//
-//    @Run(test = {
-//            "testUnintrinsifiedCheckIndex",
-//            "testUnintrinsifiedCheckIndexL",
-//            "testCheckIndex",
-//            "testCheckIndexL"
-//    })
-//    private void testCheckIndex_runner() {
-//        testUnintrinsifiedCheckIndex(0, 100, 200, 0);
-//        testUnintrinsifiedCheckIndexL(0, 100, 200, 0);
-//        testCheckIndex(0, 100, 200, 0);
-//        testCheckIndexL(0, 100, 200, 0);
-//    }
+   // Controlled test without intrinsics, should not have range checks (and traps) to begin with.
+   @Test
+   @IR(counts = { IRNode.COUNTED_LOOP, ">= 1"})
+   @IR(failOn = { IRNode.RANGE_CHECK_TRAP })
+   public static void testUnintrinsifiedCheckIndex(int start, int stop, int length, int offset) {
+       final int scale = 2;
+       final int stride = 1;
 
-//     @Test
-//     @IR(counts = { IRNode.COUNTED_LOOP, ">= 1"})
-//     @IR(failOn = { IRNode.RANGE_CHECK_TRAP })
-//     public static void testUnintrinsifiedCheckFromToIndex(int start, int stop, int length, int offset, int size) {
-//         final int scale = 2;
-//         final int stride = 1;
-//
-//         for (int i = start; i < stop; i += stride) {
-//             int from = scale * i + offset;
-//             int to = from + size;
-//             unintrinsifiedCheckFromToIndex(from, to, length);
-//         }
-//     }
+       for (int i = start; i < stop; i += stride) {
+           unintrinsifiedCheckIndex(scale * i + offset, length);
+       }
+   }
+
+   // Same but for longs
+   @Test
+   @IR(counts = { IRNode.COUNTED_LOOP, ">= 1"})
+   @IR(failOn = { IRNode.RANGE_CHECK_TRAP })
+   public static void testUnintrinsifiedCheckIndexL(long start, long stop, long length, long offset) {
+       final long scale = 2;
+       final long stride = 1;
+
+       for (long i = start; i < stop; i += stride) {
+           unintrinsifiedCheckIndexL(scale * i + offset, length);
+       }
+   }
+
+   // Test range check (and trap) successfully eliminated
+   @Test
+   @IR(failOn = { IRNode.COUNTED_LOOP })
+   @IR(counts = { IRNode.RANGE_CHECK_TRAP, "1" }, phase = CompilePhase.AFTER_PARSING)
+   @IR(failOn = { IRNode.RANGE_CHECK_TRAP }) // phase = CompilePhase.BEFORE_MATCHING
+   public static void testCheckIndex(int start, int stop, int length, int offset) {
+       final int scale = 2;
+       final int stride = 1;
+
+       for (int i = start; i < stop; i += stride) {
+           Objects.checkIndex(scale * i + offset, length);
+       }
+   }
+
+   // Same but for longs
+   @Test
+   @IR(failOn = { IRNode.COUNTED_LOOP })
+   @IR(counts = { IRNode.RANGE_CHECK_TRAP, "1" }, phase = CompilePhase.AFTER_PARSING)
+   @IR(failOn = { IRNode.RANGE_CHECK_TRAP }) // phase = CompilePhase.BEFORE_MATCHING
+   public static void testCheckIndexL(long start, long stop, long length, long offset) {
+       final long scale = 2;
+       final long stride = 1;
+
+       for (long i = start; i < stop; i += stride) {
+           Objects.checkIndex(scale * i + offset, length);
+       }
+   }
+
+   @Run(test = {
+           "testUnintrinsifiedCheckIndex",
+           "testUnintrinsifiedCheckIndexL",
+           "testCheckIndex",
+           "testCheckIndexL"
+   })
+   private void testCheckIndex_runner() {
+       testUnintrinsifiedCheckIndex(0, 100, 200, 0);
+       testUnintrinsifiedCheckIndexL(0, 100, 200, 0);
+       testCheckIndex(0, 100, 200, 0);
+       testCheckIndexL(0, 100, 200, 0);
+   }
 
     @Test
-    public static void testCheckFromIndexSize(int start, int stop, int length, int offset, int size) {
+    @IR(counts = { IRNode.COUNTED_LOOP, "3"}) // pre/main/post loops
+    @IR(failOn = { IRNode.RANGE_CHECK_TRAP })
+    public static void testUnintrinsifiedCheckFromToIndex(int start, int stop, int length, int offset, int size) {
         final int scale = 2;
         final int stride = 1;
 
         for (int i = start; i < stop; i += stride) {
             int from = scale * i + offset;
+            int to = from + size;
 
-            // from < to =>> to - from >= 0 ? no overflow!
-            // from < length
-            // to < length
-            Objects.checkFromIndexSize(from, size, length); // length invariant
+            unintrinsifiedCheckFromToIndex(from, to, length);
         }
     }
 
     @Test
+    @IR(counts = { IRNode.COUNTED_LOOP, "2"}) // range check in main loop hoisted and main loop is eliminated
+    @IR(counts = { IRNode.RANGE_CHECK_TRAP, "3" }, phase = CompilePhase.AFTER_PARSING)
+    @IR(counts = { IRNode.RANGE_CHECK_TRAP, "2" })
     public static void testCheckFromToIndex(int start, int stop, int length, int offset, int size) {
         final int scale = 2;
         final int stride = 1;
@@ -188,18 +176,61 @@ public class TestCheckIndexIntrinsics {
             // from < to =>> to - from >= 0 ? no overflow!
             // from < length
             // to < length
-            Objects.checkFromToIndex(from, to, length); // length invariant
+            Objects.checkFromToIndex(from, to, length); // to - from >= 0, from + size - from = size ?>= 0
         }
     }
 
     @Run(test = {
-            "testCheckFromIndexSize",
-//             "testUnintrinsifiedCheckFromToIndex",
+            "testUnintrinsifiedCheckFromToIndex",
+//             "testCheckFromIndexSize",
             "testCheckFromToIndex"
     })
     private void testCheckFromToIndex_runner() {
-//         testUnintrinsifiedCheckFromToIndex(0, 100, 210, 0, 10);
-        testCheckFromIndexSize(0, 100, 210, 0, 10);
+        testUnintrinsifiedCheckFromToIndex(0, 100, 210, 0, 10);
+//         testCheckFromIndexSize(0, 100, 210, 0, 10);
         testCheckFromToIndex(0, 100, 210, 0, 10);
+    }
+
+    @Test
+    @IR(counts = { IRNode.COUNTED_LOOP, "3"}) // pre/main/post loops
+    @IR(failOn = { IRNode.RANGE_CHECK_TRAP })
+    public static void testUnintrinsifiedFromIndexSize(int start, int stop, int length, int offset, int size) {
+        final int scale = 2;
+        final int stride = 1;
+
+        for (int i = start; i < stop; i += stride) {
+            int from = scale * i + offset;
+
+            // from < to =>> to - from >= 0 ? no overflow!
+            // from < length
+            // to < length
+            unintrinsifiedCheckFromIndexSize(from, size, length);
+        }
+    }
+
+    @Test
+    @IR(counts = { IRNode.COUNTED_LOOP, "2"}) // range check in pre/post loop, main loop becomes empty and eliminated
+    @IR(counts = { IRNode.RANGE_CHECK_TRAP, "2" })
+    public static void testCheckFromIndexSize(int start, int stop, int length, int offset, int size) {
+        final int scale = 2;
+        final int stride = 1;
+
+        for (int i = start; i < stop; i += stride) {
+            int from = scale * i + offset;
+
+            // from < to =>> to - from >= 0 ? no overflow!
+            // from < length
+            // to < length
+            Objects.checkFromIndexSize(from, size, length);
+        }
+    }
+
+    @Run(test = {
+                "testUnintrinsifiedFromIndexSize",
+                "testCheckFromIndexSize",
+    })
+    private void testCheckFromIndexSize_runner() {
+        testUnintrinsifiedFromIndexSize(0, 100, 210, 0, 10);
+        testCheckFromIndexSize(0, 100, 210, 0, 10);
     }
 }
