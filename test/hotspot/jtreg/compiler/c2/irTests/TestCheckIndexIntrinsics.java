@@ -25,6 +25,10 @@ package compiler.c2.irTests;
 import compiler.lib.ir_framework.*;
 
 import java.util.Objects;
+import java.util.Random;
+import java.util.function.Supplier;
+
+import jdk.test.lib.Utils;
 
 /*
  * @test
@@ -35,46 +39,50 @@ import java.util.Objects;
  * @run driver compiler.c2.irTests.TestCheckIndexIntrinsics
  */
 public class TestCheckIndexIntrinsics {
+    private static final Random RNG = Utils.getRandomInstance();
+
     public static void main(String[] args) {
         // TODO: remove PrintIdeal flag
         TestFramework.runWithFlags("-XX:PrintIdealGraphLevel=2", "-XX:CompileOnly=compiler.c2.irTests.TestCheckIndexIntrinsics::*", "-XX:LoopMaxUnroll=0");
+
+        testCorrectness();
     }
 
     // Unintrinsified bytecode functions, as in jdk.internal.util.Preconditions
     private static int unintrinsifiedCheckIndex(int index, int length) {
         if (index < 0 || index >= length)
-            throw new RuntimeException("oob");
+            throw new IndexOutOfBoundsException("oob");
         return index;
     }
 
     private static int unintrinsifiedCheckFromToIndex(int fromIndex, int toIndex, int length) {
         if (fromIndex < 0 || fromIndex > toIndex || toIndex > length)
-            throw new RuntimeException("oob");
+            throw new IndexOutOfBoundsException("oob");
         return fromIndex;
     }
 
     private static int unintrinsifiedCheckFromIndexSize(int fromIndex, int size, int length) {
         if ((length | fromIndex | size) < 0 || size > length - fromIndex)
-            throw new RuntimeException("oob");
+            throw new IndexOutOfBoundsException("oob");
         return fromIndex;
     }
 
     // Corresponding long versions
     private static long unintrinsifiedCheckIndexL(long index, long length) {
         if (index < 0 || index >= length)
-            throw new RuntimeException("oob");
+            throw new IndexOutOfBoundsException("oob");
         return index;
     }
 
     private static long unintrinsifiedCheckFromToIndexL(long fromIndex, long toIndex, long length) {
         if (fromIndex < 0 || fromIndex > toIndex || toIndex > length)
-            throw new RuntimeException("oob");
+            throw new IndexOutOfBoundsException("oob");
         return fromIndex;
     }
 
     private static long unintrinsifiedCheckFromIndexSizeL(long fromIndex, long size, long length) {
         if ((length | fromIndex | size) < 0 || size > length - fromIndex)
-            throw new RuntimeException("oob");
+            throw new IndexOutOfBoundsException("oob");
         return fromIndex;
     }
 
@@ -182,12 +190,10 @@ public class TestCheckIndexIntrinsics {
 
     @Run(test = {
             "testUnintrinsifiedCheckFromToIndex",
-//             "testCheckFromIndexSize",
             "testCheckFromToIndex"
     })
     private void testCheckFromToIndex_runner() {
         testUnintrinsifiedCheckFromToIndex(0, 100, 210, 0, 10);
-//         testCheckFromIndexSize(0, 100, 210, 0, 10);
         testCheckFromToIndex(0, 100, 210, 0, 10);
     }
 
@@ -232,5 +238,54 @@ public class TestCheckIndexIntrinsics {
     private void testCheckFromIndexSize_runner() {
         testUnintrinsifiedFromIndexSize(0, 100, 210, 0, 10);
         testCheckFromIndexSize(0, 100, 210, 0, 10);
+    }
+
+    private static void assertEqual(Supplier<Number> groundTruth, Supplier<Number> intrinsified) {
+        boolean oob = false;
+        Number expected = null;
+        try {
+            expected = groundTruth.get();
+        } catch (IndexOutOfBoundsException e) {
+            oob = true;
+        }
+
+        // TODO: does jvm fall back to interpreter mode for the subsequent call after an exception?
+        if (oob) {
+            return;
+        }
+
+        try {
+            Number observed = intrinsified.get();
+            if (!expected.equals(observed)) throw new RuntimeException("should be equal!");
+        } catch (IndexOutOfBoundsException e) {
+            if (!oob) throw new RuntimeException("should raise exception!");
+        }
+    }
+
+    private static void testCorrectness() {
+        // warm up
+        // TODO: do I even need to warm up intrinsified methods?
+        for (int i = 0; i < 20_000; i++) {
+            Objects.checkIndex(0, 42);
+            Objects.checkFromToIndex(1, 16, 42);
+            Objects.checkFromIndexSize(32, 42, 123);
+        }
+
+        int[] values = {
+            -1, -2, -10, -100, -1024, -10000, -999999,
+            0, 1, 2, 42, 64, 100, 123, 1024, 0xC0FFEE,
+            Integer.MAX_VALUE - 1, Integer.MAX_VALUE, Integer.MIN_VALUE + 1, Integer.MIN_VALUE,
+            RNG.nextInt(), RNG.nextInt(), RNG.nextInt(), RNG.nextInt()
+        };
+
+        for (int i : values) {
+            for (int j : values) {
+                for (int k : values) {
+                    assertEqual(() -> unintrinsifiedCheckIndex(i, j), () -> Objects.checkIndex(i, j));
+                    assertEqual(() -> unintrinsifiedCheckFromToIndex(i, j, k), () -> Objects.checkFromToIndex(i, j, k));
+                    assertEqual(() -> unintrinsifiedCheckFromIndexSize(i, j, k), () -> Objects.checkFromIndexSize(i, j, k));
+                }
+            }
+        }
     }
 }
