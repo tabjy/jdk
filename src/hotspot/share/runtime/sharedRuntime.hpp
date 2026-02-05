@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,7 +30,6 @@
 #include "code/vmreg.hpp"
 #include "interpreter/linkResolver.hpp"
 #include "memory/allStatic.hpp"
-#include "memory/metaspaceClosure.hpp"
 #include "memory/resourceArea.hpp"
 #include "runtime/safepointVerifiers.hpp"
 #include "runtime/stubInfo.hpp"
@@ -38,6 +37,7 @@
 
 class AdapterHandlerEntry;
 class AdapterFingerPrint;
+class MetaspaceClosure;
 class vframeStream;
 
 // Runtime is the base class for various runtime interfaces
@@ -317,14 +317,6 @@ class SharedRuntime: AllStatic {
   static void throw_and_post_jvmti_exception(JavaThread* current, Handle h_exception);
   static void throw_and_post_jvmti_exception(JavaThread* current, Symbol* name, const char *message = nullptr);
 
-#if INCLUDE_JVMTI
-  // Functions for JVMTI notifications
-  static void notify_jvmti_vthread_start(oopDesc* vt, jboolean hide, JavaThread* current);
-  static void notify_jvmti_vthread_end(oopDesc* vt, jboolean hide, JavaThread* current);
-  static void notify_jvmti_vthread_mount(oopDesc* vt, jboolean hide, JavaThread* current);
-  static void notify_jvmti_vthread_unmount(oopDesc* vt, jboolean hide, JavaThread* current);
-#endif
-
   // RedefineClasses() tracing support for obsolete method entry
   static int rc_trace_method_entry(JavaThread* thread, Method* m);
 
@@ -383,10 +375,6 @@ class SharedRuntime: AllStatic {
  private:
   // deopt blob
   static void generate_deopt_blob(void);
-
-  static bool handle_ic_miss_helper_internal(Handle receiver, nmethod* caller_nm, const frame& caller_frame,
-                                             methodHandle callee_method, Bytecodes::Code bc, CallInfo& call_info,
-                                             bool& needs_ic_stub_refill, TRAPS);
 
  public:
   static DeoptimizationBlob* deopt_blob(void)      { return _deopt_blob; }
@@ -549,7 +537,6 @@ class SharedRuntime: AllStatic {
   // A compiled caller has just called the interpreter, but compiled code
   // exists.  Patch the caller so he no longer calls into the interpreter.
   static void fixup_callers_callsite(Method* moop, address ret_pc);
-  static bool should_fixup_call_destination(address destination, address entry_point, address caller_pc, Method* moop, CodeBlob* cb);
 
   // Slow-path Locking and Unlocking
   static void complete_monitor_locking_C(oopDesc* obj, BasicLock* lock, JavaThread* current);
@@ -871,7 +858,6 @@ class AdapterHandlerLibrary: public AllStatic {
 
   static void print_handler(const CodeBlob* b) { print_handler_on(tty, b); }
   static void print_handler_on(outputStream* st, const CodeBlob* b);
-  static bool contains(const CodeBlob* b);
   static const char* name(AdapterHandlerEntry* handler);
   static uint32_t id(AdapterHandlerEntry* handler);
 #ifndef PRODUCT
