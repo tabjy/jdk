@@ -1454,22 +1454,24 @@ bool LibraryCallKit::inline_preconditions_checkIndex(BasicType bt) {
   }
 
   // Check that length is positive
-  length = insert_positive_check(*this, length, bt);
-  if (length == nullptr) {
+  Node* casted_length = insert_positive_check(*this, length, bt);
+  if (casted_length == nullptr) {
     // Length is known to be always negative during compilation and the IR graph so far constructed is good so return
     // success
     return true;
   }
+  replace_in_map(length, casted_length);
 
   // Use an unsigned comparison for the range check itself
-  index = insert_unsigned_range_check(*this, index, length, BoolTest::lt, bt);
-  if (index == nullptr) {
+  Node* casted_index = insert_unsigned_range_check(*this, index, casted_length, BoolTest::lt, bt);
+  if (casted_length == nullptr) {
     // Range check is known to always fail during compilation and the IR graph so far constructed is good so return
     // success
     return true;
   }
+  replace_in_map(index, casted_index);
 
-  set_result(index);
+  set_result(casted_index);
   return true;
 }
 

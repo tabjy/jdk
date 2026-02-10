@@ -24,139 +24,244 @@ package compiler.c2.irTests;
 
 import compiler.lib.ir_framework.*;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.net.MalformedURLException;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.nio.file.Paths;
+import java.util.Arrays;
 import java.util.Objects;
 import java.util.Random;
 import java.util.function.Supplier;
 
+import compiler.whitebox.CompilerWhiteBoxTest;
 import jdk.test.lib.Utils;
+import jdk.test.whitebox.WhiteBox;
 
 /*
  * @test
  * @bug 8361837
  * @summary C2: investigate intrinsification of Preconditions.checkFromToIndex() and Preconditions.checkFromIndexSize()
- * @library /test/lib /
  * @requires vm.compiler2.enabled
- * @run driver compiler.c2.irTests.TestCheckIndexIntrinsics
+ * @library /test/lib /
+ * @modules java.base/jdk.internal.util
+ * @build jdk.test.whitebox.WhiteBox
+ * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
+ *
+ * @run main/othervm -ea -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI compiler.c2.irTests.TestCheckIndexIntrinsics
  */
 public class TestCheckIndexIntrinsics {
     private static final Random RNG = Utils.getRandomInstance();
 
-    public static void main(String[] args) {
-        // TODO: remove PrintIdeal flag
-        TestFramework.runWithFlags("-XX:PrintIdealGraphLevel=2", "-XX:CompileOnly=compiler.c2.irTests.TestCheckIndexIntrinsics::*", "-XX:LoopMaxUnroll=0");
+    private static final WhiteBox WHITE_BOX = WhiteBox.getWhiteBox();
+
+    private static void assertIsCompiled(Method m) {
+        // if (!WHITE_BOX.isMethodCompiled(m) || WHITE_BOX.getMethodCompilationLevel(m) != CompilerWhiteBoxTest.COMP_LEVEL_FULL_OPTIMIZATION) {
+        if (!WHITE_BOX.isMethodCompiled(m)) {
+            throw new RuntimeException("should still be compiled");
+        }
+    }
+
+    private static void assertIsNotCompiled(Method m) {
+        // if (WHITE_BOX.isMethodCompiled(m) && WHITE_BOX.getMethodCompilationLevel(m) == CompilerWhiteBoxTest.COMP_LEVEL_FULL_OPTIMIZATION) {
+        if (!WHITE_BOX.isMethodCompiled(m)) {
+            throw new RuntimeException("should have been deoptimized");
+        }
+    }
+
+    private static void compile(Method m) {
+        WHITE_BOX.enqueueMethodForCompilation(m, CompilerWhiteBoxTest.COMP_LEVEL_FULL_PROFILE);
+        assertIsCompiled(m);
+    }
+
+    public static ClassLoader newClassLoader() {
+        try {
+            return new URLClassLoader(new URL[] {
+                    Paths.get(System.getProperty("test.classes",".")).toUri().toURL(),
+            }, null);
+        } catch (MalformedURLException e){
+            throw new RuntimeException("Unexpected URL conversion failure", e);
+        }
+    }
+
+    private static void testShouldThrow(String method, Object[] compileArgs, Object[] args) throws Exception {
+        Class<?> c = newClassLoader().loadClass(TestCheckIndexIntrinsics.class.getName());
+        Method m = args.length == 2
+                ? c.getDeclaredMethod(method, int.class, int.class)
+                : c.getDeclaredMethod(method, int.class, int.class, int.class);
+
+        // compile with known "good" values
+        System.out.println("comp level? = " + WHITE_BOX.getMethodCompilationLevel(m));
+        for (int i = 0; i < 20_000; i++) {
+            if (args.length == 2) {
+                m.invoke(null, compileArgs); // checkIndex
+            } else {
+                m.invoke(null, compileArgs); // checkFromToIndex, checkFromIndexSize
+            }
+            System.out.println("comp level? = " + WHITE_BOX.getMethodCompilationLevel(m));
+        }
+        compile(m);
+
+        if (args.length == 2) {
+            m.invoke(null, compileArgs); // checkIndex
+        } else {
+            m.invoke(null, compileArgs); // checkFromToIndex, checkFromIndexSize
+        }
+        assertIsCompiled(m);
+
+        try {
+            m.invoke(null, args);
+            throw new RuntimeException("should have thrown");
+        } catch (InvocationTargetException e) {
+            if (!(e.getCause() instanceof IndexOutOfBoundsException)) {
+                throw new RuntimeException("unexpected exception");
+            }
+        }
+
+        assertIsNotCompiled(m);
+    }
+
+    public static void main(String[] args) throws Exception {
+        TestFramework.runWithFlags("-XX:CompileOnly=" + TestCheckIndexIntrinsics.class.getName() + "::*", "-XX:LoopMaxUnroll=0");
 
         testCorrectness();
     }
 
+    public static int checkIndex(int index, int length) {
+        return Objects.checkIndex(index, length);
+    }
+
+    public static int checkFromToIndex(int fromIndex, int toIndex, int length) {
+        return Objects.checkFromToIndex(fromIndex, toIndex, length);
+    }
+
+    public static int checkFromIndexSize(int fromIndex, int size, int length) {
+        return Objects.checkFromIndexSize(fromIndex, size, length);
+    }
+
+    // Corresponding long versions
+    public static long checkIndex(long index, long length) {
+        return Objects.checkIndex(index, length);
+    }
+
+    public static long checkFromToIndex(long fromIndex, long toIndex, long length) {
+        return Objects.checkFromToIndex(fromIndex, toIndex, length);
+    }
+
+    public static long checkFromIndexSize(long fromIndex, long size, long length) {
+        return Objects.checkFromIndexSize(fromIndex, size, length);
+    }
+
     // Unintrinsified bytecode functions, as in jdk.internal.util.Preconditions
-    private static int unintrinsifiedCheckIndex(int index, int length) {
+    public static int unintrinsifiedCheckIndex(int index, int length) {
         if (index < 0 || index >= length)
             throw new IndexOutOfBoundsException("oob");
         return index;
     }
 
-    private static int unintrinsifiedCheckFromToIndex(int fromIndex, int toIndex, int length) {
+    public static int unintrinsifiedCheckFromToIndex(int fromIndex, int toIndex, int length) {
         if (fromIndex < 0 || fromIndex > toIndex || toIndex > length)
             throw new IndexOutOfBoundsException("oob");
         return fromIndex;
     }
 
-    private static int unintrinsifiedCheckFromIndexSize(int fromIndex, int size, int length) {
+    public static int unintrinsifiedCheckFromIndexSize(int fromIndex, int size, int length) {
         if ((length | fromIndex | size) < 0 || size > length - fromIndex)
             throw new IndexOutOfBoundsException("oob");
         return fromIndex;
     }
 
     // Corresponding long versions
-    private static long unintrinsifiedCheckIndexL(long index, long length) {
+    public static long unintrinsifiedCheckIndexL(long index, long length) {
         if (index < 0 || index >= length)
             throw new IndexOutOfBoundsException("oob");
         return index;
     }
 
-    private static long unintrinsifiedCheckFromToIndexL(long fromIndex, long toIndex, long length) {
+    public static long unintrinsifiedCheckFromToIndexL(long fromIndex, long toIndex, long length) {
         if (fromIndex < 0 || fromIndex > toIndex || toIndex > length)
             throw new IndexOutOfBoundsException("oob");
         return fromIndex;
     }
 
-    private static long unintrinsifiedCheckFromIndexSizeL(long fromIndex, long size, long length) {
+    public static long unintrinsifiedCheckFromIndexSizeL(long fromIndex, long size, long length) {
         if ((length | fromIndex | size) < 0 || size > length - fromIndex)
             throw new IndexOutOfBoundsException("oob");
         return fromIndex;
     }
 
     // TODO: re-enable tests
-   // Controlled test without intrinsics, should not have range checks (and traps) to begin with.
-   @Test
-   @IR(counts = { IRNode.COUNTED_LOOP, ">= 1"})
-   @IR(failOn = { IRNode.RANGE_CHECK_TRAP })
-   public static void testUnintrinsifiedCheckIndex(int start, int stop, int length, int offset) {
-       final int scale = 2;
-       final int stride = 1;
+    // Controlled test without intrinsics, should not have range checks (and traps) to begin with.
+    @Test
+    @IR(counts = {IRNode.COUNTED_LOOP, ">= 1"})
+    @IR(failOn = {IRNode.RANGE_CHECK_TRAP})
+    public static void testUnintrinsifiedCheckIndex(int start, int stop, int length, int offset) {
+        final int scale = 2;
+        final int stride = 1;
 
-       for (int i = start; i < stop; i += stride) {
-           unintrinsifiedCheckIndex(scale * i + offset, length);
-       }
-   }
+        for (int i = start; i < stop; i += stride) {
+            unintrinsifiedCheckIndex(scale * i + offset, length);
+        }
+    }
 
-   // Same but for longs
-   @Test
-   @IR(counts = { IRNode.COUNTED_LOOP, ">= 1"})
-   @IR(failOn = { IRNode.RANGE_CHECK_TRAP })
-   public static void testUnintrinsifiedCheckIndexL(long start, long stop, long length, long offset) {
-       final long scale = 2;
-       final long stride = 1;
+    // Same but for longs
+    @Test
+    @IR(counts = {IRNode.COUNTED_LOOP, ">= 1"})
+    @IR(failOn = {IRNode.RANGE_CHECK_TRAP})
+    public static void testUnintrinsifiedCheckIndexL(long start, long stop, long length, long offset) {
+        final long scale = 2;
+        final long stride = 1;
 
-       for (long i = start; i < stop; i += stride) {
-           unintrinsifiedCheckIndexL(scale * i + offset, length);
-       }
-   }
+        for (long i = start; i < stop; i += stride) {
+            unintrinsifiedCheckIndexL(scale * i + offset, length);
+        }
+    }
 
-   // Test range check (and trap) successfully eliminated
-   @Test
-   @IR(failOn = { IRNode.COUNTED_LOOP })
-   @IR(counts = { IRNode.RANGE_CHECK_TRAP, "1" }, phase = CompilePhase.AFTER_PARSING)
-   @IR(failOn = { IRNode.RANGE_CHECK_TRAP }) // phase = CompilePhase.BEFORE_MATCHING
-   public static void testCheckIndex(int start, int stop, int length, int offset) {
-       final int scale = 2;
-       final int stride = 1;
+    // Test range check (and trap) successfully eliminated
+    @Test
+    @IR(failOn = {IRNode.COUNTED_LOOP})
+    @IR(counts = {IRNode.RANGE_CHECK_TRAP, "1"}, phase = CompilePhase.AFTER_PARSING)
+    @IR(failOn = {IRNode.RANGE_CHECK_TRAP}) // phase = CompilePhase.BEFORE_MATCHING
+    public static void testCheckIndex(int start, int stop, int length, int offset) {
+        final int scale = 2;
+        final int stride = 1;
 
-       for (int i = start; i < stop; i += stride) {
-           Objects.checkIndex(scale * i + offset, length);
-       }
-   }
+        for (int i = start; i < stop; i += stride) {
+            Objects.checkIndex(scale * i + offset, length);
+        }
+    }
 
-   // Same but for longs
-   @Test
-   @IR(failOn = { IRNode.COUNTED_LOOP })
-   @IR(counts = { IRNode.RANGE_CHECK_TRAP, "1" }, phase = CompilePhase.AFTER_PARSING)
-   @IR(failOn = { IRNode.RANGE_CHECK_TRAP }) // phase = CompilePhase.BEFORE_MATCHING
-   public static void testCheckIndexL(long start, long stop, long length, long offset) {
-       final long scale = 2;
-       final long stride = 1;
+    // Same but for longs
+    @Test
+    @IR(failOn = {IRNode.COUNTED_LOOP})
+    @IR(counts = {IRNode.RANGE_CHECK_TRAP, "1"}, phase = CompilePhase.AFTER_PARSING)
+    @IR(failOn = {IRNode.RANGE_CHECK_TRAP}) // phase = CompilePhase.BEFORE_MATCHING
+    public static void testCheckIndexL(long start, long stop, long length, long offset) {
+        final long scale = 2;
+        final long stride = 1;
 
-       for (long i = start; i < stop; i += stride) {
-           Objects.checkIndex(scale * i + offset, length);
-       }
-   }
+        for (long i = start; i < stop; i += stride) {
+            Objects.checkIndex(scale * i + offset, length);
+        }
+    }
 
-   @Run(test = {
-           "testUnintrinsifiedCheckIndex",
-           "testUnintrinsifiedCheckIndexL",
-           "testCheckIndex",
-           "testCheckIndexL"
-   })
-   private void testCheckIndex_runner() {
-       testUnintrinsifiedCheckIndex(0, 100, 200, 0);
-       testUnintrinsifiedCheckIndexL(0, 100, 200, 0);
-       testCheckIndex(0, 100, 200, 0);
-       testCheckIndexL(0, 100, 200, 0);
-   }
+    @Run(test = {
+            "testUnintrinsifiedCheckIndex",
+            "testUnintrinsifiedCheckIndexL",
+            "testCheckIndex",
+            "testCheckIndexL"
+    })
+    private void testCheckIndex_runner() {
+        testUnintrinsifiedCheckIndex(0, 100, 200, 0);
+        testUnintrinsifiedCheckIndexL(0, 100, 200, 0);
+        testCheckIndex(0, 100, 200, 0);
+        testCheckIndexL(0, 100, 200, 0);
+    }
 
     @Test
-    @IR(counts = { IRNode.COUNTED_LOOP, "3"}) // pre/main/post loops
-    @IR(failOn = { IRNode.RANGE_CHECK_TRAP })
+    @IR(counts = {IRNode.COUNTED_LOOP, "3"}) // pre/main/post loops
+    @IR(failOn = {IRNode.RANGE_CHECK_TRAP})
     public static void testUnintrinsifiedCheckFromToIndex(int start, int stop, int length, int offset, int size) {
         final int scale = 2;
         final int stride = 1;
@@ -170,9 +275,9 @@ public class TestCheckIndexIntrinsics {
     }
 
     @Test
-    @IR(counts = { IRNode.COUNTED_LOOP, "2"}) // range check in main loop hoisted and main loop is eliminated
-    @IR(counts = { IRNode.RANGE_CHECK_TRAP, "3" }, phase = CompilePhase.AFTER_PARSING)
-    @IR(counts = { IRNode.RANGE_CHECK_TRAP, "2" })
+    @IR(counts = {IRNode.COUNTED_LOOP, "2"}) // range check in main loop hoisted and main loop is eliminated
+    @IR(counts = {IRNode.RANGE_CHECK_TRAP, "3"}, phase = CompilePhase.AFTER_PARSING)
+    @IR(counts = {IRNode.RANGE_CHECK_TRAP, "2"})
     public static void testCheckFromToIndex(int start, int stop, int length, int offset, int size) {
         final int scale = 2;
         final int stride = 1;
@@ -198,8 +303,8 @@ public class TestCheckIndexIntrinsics {
     }
 
     @Test
-    @IR(counts = { IRNode.COUNTED_LOOP, "3"}) // pre/main/post loops
-    @IR(failOn = { IRNode.RANGE_CHECK_TRAP })
+    @IR(counts = {IRNode.COUNTED_LOOP, "3"}) // pre/main/post loops
+    @IR(failOn = {IRNode.RANGE_CHECK_TRAP})
     public static void testUnintrinsifiedFromIndexSize(int start, int stop, int length, int offset, int size) {
         final int scale = 2;
         final int stride = 1;
@@ -215,8 +320,8 @@ public class TestCheckIndexIntrinsics {
     }
 
     @Test
-    @IR(counts = { IRNode.COUNTED_LOOP, "2"}) // range check in pre/post loop, main loop becomes empty and eliminated
-    @IR(counts = { IRNode.RANGE_CHECK_TRAP, "2" })
+    @IR(counts = {IRNode.COUNTED_LOOP, "2"}) // range check in pre/post loop, main loop becomes empty and eliminated
+    @IR(counts = {IRNode.RANGE_CHECK_TRAP, "2"})
     public static void testCheckFromIndexSize(int start, int stop, int length, int offset, int size) {
         final int scale = 2;
         final int stride = 1;
@@ -232,58 +337,106 @@ public class TestCheckIndexIntrinsics {
     }
 
     @Run(test = {
-                "testUnintrinsifiedFromIndexSize",
-                "testCheckFromIndexSize",
+            "testUnintrinsifiedFromIndexSize",
+            "testCheckFromIndexSize",
     })
     private void testCheckFromIndexSize_runner() {
         testUnintrinsifiedFromIndexSize(0, 100, 210, 0, 10);
         testCheckFromIndexSize(0, 100, 210, 0, 10);
     }
 
-    private static void assertEqual(Supplier<Number> groundTruth, Supplier<Number> intrinsified) {
+    private static void assertEqual(Method groundTruth, Method intrinsified, String method, Object[] compileArgs, Object[] args)
+            throws Exception {
         boolean oob = false;
-        Number expected = null;
+        Object expected = null;
         try {
-            expected = groundTruth.get();
-        } catch (IndexOutOfBoundsException e) {
-            oob = true;
+            System.out.println("args = " + Arrays.toString(args));
+            System.out.print(groundTruth.getParameterCount());
+            expected = groundTruth.invoke(null, args);
+        } catch (InvocationTargetException e) {
+            if (e.getCause() instanceof IndexOutOfBoundsException) {
+                oob = true;
+            } else {
+                throw e;
+            }
         }
 
-        // TODO: does jvm fall back to interpreter mode for the subsequent call after an exception?
+//        // TODO: does jvm fall back to interpreter mode for the subsequent call after an exception?
+//        if (oob) {
+//            return;
+//        }
+
         if (oob) {
+            testShouldThrow(method, compileArgs, args);
             return;
         }
 
-        try {
-            Number observed = intrinsified.get();
-            if (!expected.equals(observed)) throw new RuntimeException("should be equal!");
-        } catch (IndexOutOfBoundsException e) {
-            if (!oob) throw new RuntimeException("should raise exception!");
-        }
+        Object observed = intrinsified.invoke(null, args);
+        if (!expected.equals(observed)) throw new RuntimeException("should be equal!");
+
+//        try {
+//            Number observed = intrinsified.get();
+//            if (!expected.equals(observed)) throw new RuntimeException("should be equal!");
+//        } catch (IndexOutOfBoundsException e) {
+//            if (!oob) throw new RuntimeException("should raise exception!");
+//        }
     }
 
-    private static void testCorrectness() {
+
+
+    private static void testCorrectness() throws Exception {
         // warm up
         // TODO: do I even need to warm up intrinsified methods?
         for (int i = 0; i < 20_000; i++) {
-            Objects.checkIndex(0, 42);
-            Objects.checkFromToIndex(1, 16, 42);
-            Objects.checkFromIndexSize(32, 42, 123);
+            checkIndex(0, 42);
+            checkFromToIndex(1, 16, 42);
+            checkFromIndexSize(32, 42, 123);
         }
 
+        Method checkIndex = TestCheckIndexIntrinsics.class.getDeclaredMethod("checkIndex", int.class, int.class);
+        Method checkFromToIndex = TestCheckIndexIntrinsics.class.getDeclaredMethod("checkFromToIndex", int.class, int.class, int.class);
+        Method checkFromIndexSize = TestCheckIndexIntrinsics.class.getDeclaredMethod("checkFromIndexSize", int.class, int.class, int.class);
+
+        checkIndex.invoke(null, 0, 42);
+        checkFromToIndex.invoke(null, 1, 16, 42);
+        checkFromIndexSize.invoke(null, 32, 42, 123);
+
+        System.out.println("compiled? = " + WHITE_BOX.isMethodCompiled(checkIndex));
+        System.out.println("level? = " + WHITE_BOX.getMethodCompilationLevel(checkIndex));
+        assertIsCompiled(checkIndex);
+        assertIsCompiled(checkFromToIndex);
+        assertIsCompiled(checkFromIndexSize);
+
         int[] values = {
-            -1, -2, -10, -100, -1024, -10000, -999999,
-            0, 1, 2, 42, 64, 100, 123, 1024, 0xC0FFEE,
-            Integer.MAX_VALUE - 1, Integer.MAX_VALUE, Integer.MIN_VALUE + 1, Integer.MIN_VALUE,
-            RNG.nextInt(), RNG.nextInt(), RNG.nextInt(), RNG.nextInt()
+                -1, -2, -10, -100, -1024, -10000, -999999,
+                0, 1, 2, 42, 64, 100, 123, 1024, 0xC0FFEE,
+                Integer.MAX_VALUE - 1, Integer.MAX_VALUE, Integer.MIN_VALUE + 1, Integer.MIN_VALUE,
+                RNG.nextInt(), RNG.nextInt(), RNG.nextInt(), RNG.nextInt()
         };
 
         for (int i : values) {
             for (int j : values) {
                 for (int k : values) {
-                    assertEqual(() -> unintrinsifiedCheckIndex(i, j), () -> Objects.checkIndex(i, j));
-                    assertEqual(() -> unintrinsifiedCheckFromToIndex(i, j, k), () -> Objects.checkFromToIndex(i, j, k));
-                    assertEqual(() -> unintrinsifiedCheckFromIndexSize(i, j, k), () -> Objects.checkFromIndexSize(i, j, k));
+                    assertEqual(
+                            TestCheckIndexIntrinsics.class.getDeclaredMethod("unintrinsifiedCheckIndex", int.class, int.class),
+                            checkIndex,
+                            "checkIndex",
+                            new Object[]{0, 42},
+                            new Object[]{i, j});
+
+                    assertEqual(
+                            TestCheckIndexIntrinsics.class.getDeclaredMethod("unintrinsifiedCheckFromToIndex", int.class, int.class, int.class),
+                            checkFromToIndex,
+                            "checkFromToIndex",
+                            new Object[]{1, 16, 42},
+                            new Object[]{i, j, k});
+
+                    assertEqual(
+                            TestCheckIndexIntrinsics.class.getDeclaredMethod("unintrinsifiedCheckFromIndexSize", int.class, int.class, int.class),
+                            checkFromIndexSize,
+                            "checkFromIndexSize",
+                            new Object[]{32, 42, 123},
+                            new Object[]{i, j, k});
                 }
             }
         }
