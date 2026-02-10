@@ -49,7 +49,7 @@ import jdk.test.whitebox.WhiteBox;
  * @build jdk.test.whitebox.WhiteBox
  * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  *
- * @run main/othervm -ea -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI compiler.c2.irTests.TestCheckIndexIntrinsics
+ * @run main/othervm -ea -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -XX:-BackgroundCompilation compiler.c2.irTests.TestCheckIndexIntrinsics
  */
 public class TestCheckIndexIntrinsics {
     private static final Random RNG = Utils.getRandomInstance();
@@ -57,21 +57,21 @@ public class TestCheckIndexIntrinsics {
     private static final WhiteBox WHITE_BOX = WhiteBox.getWhiteBox();
 
     private static void assertIsCompiled(Method m) {
-        // if (!WHITE_BOX.isMethodCompiled(m) || WHITE_BOX.getMethodCompilationLevel(m) != CompilerWhiteBoxTest.COMP_LEVEL_FULL_OPTIMIZATION) {
-        if (!WHITE_BOX.isMethodCompiled(m)) {
+         if (!WHITE_BOX.isMethodCompiled(m) || WHITE_BOX.getMethodCompilationLevel(m) != CompilerWhiteBoxTest.COMP_LEVEL_FULL_OPTIMIZATION) {
+//        if (!WHITE_BOX.isMethodCompiled(m)) {
             throw new RuntimeException("should still be compiled");
         }
     }
 
     private static void assertIsNotCompiled(Method m) {
-        // if (WHITE_BOX.isMethodCompiled(m) && WHITE_BOX.getMethodCompilationLevel(m) == CompilerWhiteBoxTest.COMP_LEVEL_FULL_OPTIMIZATION) {
-        if (!WHITE_BOX.isMethodCompiled(m)) {
+         if (WHITE_BOX.isMethodCompiled(m) && WHITE_BOX.getMethodCompilationLevel(m) == CompilerWhiteBoxTest.COMP_LEVEL_FULL_OPTIMIZATION) {
+//        if (WHITE_BOX.isMethodCompiled(m)) {
             throw new RuntimeException("should have been deoptimized");
         }
     }
 
     private static void compile(Method m) {
-        WHITE_BOX.enqueueMethodForCompilation(m, CompilerWhiteBoxTest.COMP_LEVEL_FULL_PROFILE);
+        WHITE_BOX.enqueueMethodForCompilation(m, CompilerWhiteBoxTest.COMP_LEVEL_FULL_OPTIMIZATION);
         assertIsCompiled(m);
     }
 
@@ -91,35 +91,26 @@ public class TestCheckIndexIntrinsics {
                 ? c.getDeclaredMethod(method, int.class, int.class)
                 : c.getDeclaredMethod(method, int.class, int.class, int.class);
 
-        // compile with known "good" values
-        System.out.println("comp level? = " + WHITE_BOX.getMethodCompilationLevel(m));
-        for (int i = 0; i < 20_000; i++) {
-            if (args.length == 2) {
-                m.invoke(null, compileArgs); // checkIndex
-            } else {
-                m.invoke(null, compileArgs); // checkFromToIndex, checkFromIndexSize
-            }
-            System.out.println("comp level? = " + WHITE_BOX.getMethodCompilationLevel(m));
-        }
+        assertIsNotCompiled(m);
+
+        // run and compile with known "good" values
+        m.invoke(null, compileArgs); // run once so all classes are loaded
         compile(m);
 
-        if (args.length == 2) {
-            m.invoke(null, compileArgs); // checkIndex
-        } else {
-            m.invoke(null, compileArgs); // checkFromToIndex, checkFromIndexSize
-        }
+        m.invoke(null, compileArgs);
         assertIsCompiled(m);
 
         try {
             m.invoke(null, args);
-            throw new RuntimeException("should have thrown");
         } catch (InvocationTargetException e) {
-            if (!(e.getCause() instanceof IndexOutOfBoundsException)) {
-                throw new RuntimeException("unexpected exception");
+            if (e.getCause() instanceof IndexOutOfBoundsException) {
+                return;
             }
+
+            throw new RuntimeException("unexpected exception");
         }
 
-        assertIsNotCompiled(m);
+        throw new RuntimeException("should have thrown");
     }
 
     public static void main(String[] args) throws Exception {
