@@ -33,7 +33,6 @@ import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.Objects;
 import java.util.Random;
-import java.util.function.Supplier;
 
 import compiler.whitebox.CompilerWhiteBoxTest;
 import jdk.test.lib.Utils;
@@ -47,71 +46,13 @@ import jdk.test.whitebox.WhiteBox;
  * @library /test/lib /
  * @modules java.base/jdk.internal.util
  * @build jdk.test.whitebox.WhiteBox
- * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  *
+ * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm -ea -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -XX:-BackgroundCompilation compiler.c2.irTests.TestCheckIndexIntrinsics
  */
 public class TestCheckIndexIntrinsics {
     private static final Random RNG = Utils.getRandomInstance();
-
     private static final WhiteBox WHITE_BOX = WhiteBox.getWhiteBox();
-
-    private static void assertIsCompiled(Method m) {
-         if (!WHITE_BOX.isMethodCompiled(m) || WHITE_BOX.getMethodCompilationLevel(m) != CompilerWhiteBoxTest.COMP_LEVEL_FULL_OPTIMIZATION) {
-//        if (!WHITE_BOX.isMethodCompiled(m)) {
-            throw new RuntimeException("should still be compiled");
-        }
-    }
-
-    private static void assertIsNotCompiled(Method m) {
-         if (WHITE_BOX.isMethodCompiled(m) && WHITE_BOX.getMethodCompilationLevel(m) == CompilerWhiteBoxTest.COMP_LEVEL_FULL_OPTIMIZATION) {
-//        if (WHITE_BOX.isMethodCompiled(m)) {
-            throw new RuntimeException("should have been deoptimized");
-        }
-    }
-
-    private static void compile(Method m) {
-        WHITE_BOX.enqueueMethodForCompilation(m, CompilerWhiteBoxTest.COMP_LEVEL_FULL_OPTIMIZATION);
-        assertIsCompiled(m);
-    }
-
-    public static ClassLoader newClassLoader() {
-        try {
-            return new URLClassLoader(new URL[] {
-                    Paths.get(System.getProperty("test.classes",".")).toUri().toURL(),
-            }, null);
-        } catch (MalformedURLException e){
-            throw new RuntimeException("Unexpected URL conversion failure", e);
-        }
-    }
-
-    private static void testShouldThrow(String method, Object[] compileArgs, Object[] args) throws Exception {
-        Class<?> c = newClassLoader().loadClass(TestCheckIndexIntrinsics.class.getName());
-        Method m = args.length == 2
-                ? c.getDeclaredMethod(method, int.class, int.class)
-                : c.getDeclaredMethod(method, int.class, int.class, int.class);
-
-        assertIsNotCompiled(m);
-
-        // run and compile with known "good" values
-        m.invoke(null, compileArgs); // run once so all classes are loaded
-        compile(m);
-
-        m.invoke(null, compileArgs);
-        assertIsCompiled(m);
-
-        try {
-            m.invoke(null, args);
-        } catch (InvocationTargetException e) {
-            if (e.getCause() instanceof IndexOutOfBoundsException) {
-                return;
-            }
-
-            throw new RuntimeException("unexpected exception");
-        }
-
-        throw new RuntimeException("should have thrown");
-    }
 
     public static void main(String[] args) throws Exception {
         TestFramework.runWithFlags("-XX:CompileOnly=" + TestCheckIndexIntrinsics.class.getName() + "::*", "-XX:LoopMaxUnroll=0");
@@ -119,6 +60,7 @@ public class TestCheckIndexIntrinsics {
         testCorrectness();
     }
 
+    // Calling intrinsified functions and having them inlined.
     public static int checkIndex(int index, int length) {
         return Objects.checkIndex(index, length);
     }
@@ -131,7 +73,6 @@ public class TestCheckIndexIntrinsics {
         return Objects.checkFromIndexSize(fromIndex, size, length);
     }
 
-    // Corresponding long versions
     public static long checkIndex(long index, long length) {
         return Objects.checkIndex(index, length);
     }
@@ -182,7 +123,6 @@ public class TestCheckIndexIntrinsics {
         return fromIndex;
     }
 
-    // TODO: re-enable tests
     // Controlled test without intrinsics, should not have range checks (and traps) to begin with.
     @Test
     @IR(counts = {IRNode.COUNTED_LOOP, ">= 1"})
@@ -219,7 +159,7 @@ public class TestCheckIndexIntrinsics {
         final int stride = 1;
 
         for (int i = start; i < stop; i += stride) {
-            Objects.checkIndex(scale * i + offset, length);
+            checkIndex(scale * i + offset, length);
         }
     }
 
@@ -233,7 +173,7 @@ public class TestCheckIndexIntrinsics {
         final long stride = 1;
 
         for (long i = start; i < stop; i += stride) {
-            Objects.checkIndex(scale * i + offset, length);
+            checkIndex(scale * i + offset, length);
         }
     }
 
@@ -280,7 +220,7 @@ public class TestCheckIndexIntrinsics {
             // from < to =>> to - from >= 0 ? no overflow!
             // from < length
             // to < length
-            Objects.checkFromToIndex(from, to, length); // to - from >= 0, from + size - from = size ?>= 0
+            checkFromToIndex(from, to, length); // to - from >= 0, from + size - from = size ?>= 0
         }
     }
 
@@ -323,7 +263,7 @@ public class TestCheckIndexIntrinsics {
             // from < to =>> to - from >= 0 ? no overflow!
             // from < length
             // to < length
-            Objects.checkFromIndexSize(from, size, length);
+            checkFromIndexSize(from, size, length);
         }
     }
 
@@ -336,54 +276,88 @@ public class TestCheckIndexIntrinsics {
         testCheckFromIndexSize(0, 100, 210, 0, 10);
     }
 
+    private static void assertIsCompiled(Method m) {
+        if (!WHITE_BOX.isMethodCompiled(m) || WHITE_BOX.getMethodCompilationLevel(m) != CompilerWhiteBoxTest.COMP_LEVEL_FULL_OPTIMIZATION) {
+            throw new AssertionError("should still be compiled");
+        }
+    }
+
+    private static void assertIsNotCompiled(Method m) {
+        if (WHITE_BOX.isMethodCompiled(m) && WHITE_BOX.getMethodCompilationLevel(m) == CompilerWhiteBoxTest.COMP_LEVEL_FULL_OPTIMIZATION) {
+            throw new AssertionError("should have been deoptimized");
+        }
+    }
+
+    private static void compile(Method m) {
+        WHITE_BOX.enqueueMethodForCompilation(m, CompilerWhiteBoxTest.COMP_LEVEL_FULL_OPTIMIZATION);
+        assertIsCompiled(m);
+    }
+
+    public static ClassLoader newClassLoader() {
+        try {
+            return new URLClassLoader(new URL[]{
+                    Paths.get(System.getProperty("test.classes", ".")).toUri().toURL(),
+            }, null);
+        } catch (MalformedURLException e) {
+            throw new RuntimeException("Unexpected URL conversion failure", e);
+        }
+    }
+
+    private static void testShouldThrow(String method, Object[] compileArgs, Object[] args) throws Exception {
+        Class<?> c = newClassLoader().loadClass(TestCheckIndexIntrinsics.class.getName());
+        Method m = args.length == 2
+                ? c.getDeclaredMethod(method, int.class, int.class)
+                : c.getDeclaredMethod(method, int.class, int.class, int.class);
+
+        assertIsNotCompiled(m);
+
+        // run and compile with known "good" values
+        m.invoke(null, compileArgs); // run once so all classes are loaded
+        compile(m);
+
+        m.invoke(null, compileArgs);
+        assertIsCompiled(m);
+
+        try {
+            m.invoke(null, args);
+        } catch (InvocationTargetException e) {
+            if (e.getCause() instanceof IndexOutOfBoundsException) {
+                return;
+            }
+
+            throw new AssertionError("unexpected exception", e);
+        }
+
+        throw new AssertionError(String.format("%s(%s): should have thrown", method, Arrays.toString(args)));
+    }
+
     private static void assertEqual(Method groundTruth, Method intrinsified, String method, Object[] compileArgs, Object[] args)
             throws Exception {
         boolean oob = false;
         Object expected = null;
         try {
-            System.out.println("args = " + Arrays.toString(args));
-            System.out.print(groundTruth.getParameterCount());
             expected = groundTruth.invoke(null, args);
         } catch (InvocationTargetException e) {
             if (e.getCause() instanceof IndexOutOfBoundsException) {
                 oob = true;
             } else {
-                throw e;
+                throw new AssertionError("unexpected exception", e);
             }
         }
 
-//        // TODO: does jvm fall back to interpreter mode for the subsequent call after an exception?
-//        if (oob) {
-//            return;
-//        }
-
         if (oob) {
             testShouldThrow(method, compileArgs, args);
-            return;
+        } else {
+            Object observed = intrinsified.invoke(null, args);
+            if (!expected.equals(observed)) {
+                throw new AssertionError(String.format("%s(%s): expected %s, got %s",
+                        intrinsified.getName(), Arrays.toString(args), expected, observed));
+            }
         }
-
-        Object observed = intrinsified.invoke(null, args);
-        if (!expected.equals(observed)) throw new RuntimeException("should be equal!");
-
-//        try {
-//            Number observed = intrinsified.get();
-//            if (!expected.equals(observed)) throw new RuntimeException("should be equal!");
-//        } catch (IndexOutOfBoundsException e) {
-//            if (!oob) throw new RuntimeException("should raise exception!");
-//        }
     }
 
 
-
     private static void testCorrectness() throws Exception {
-        // warm up
-        // TODO: do I even need to warm up intrinsified methods?
-        for (int i = 0; i < 20_000; i++) {
-            checkIndex(0, 42);
-            checkFromToIndex(1, 16, 42);
-            checkFromIndexSize(32, 42, 123);
-        }
-
         Method checkIndex = TestCheckIndexIntrinsics.class.getDeclaredMethod("checkIndex", int.class, int.class);
         Method checkFromToIndex = TestCheckIndexIntrinsics.class.getDeclaredMethod("checkFromToIndex", int.class, int.class, int.class);
         Method checkFromIndexSize = TestCheckIndexIntrinsics.class.getDeclaredMethod("checkFromIndexSize", int.class, int.class, int.class);
@@ -392,11 +366,9 @@ public class TestCheckIndexIntrinsics {
         checkFromToIndex.invoke(null, 1, 16, 42);
         checkFromIndexSize.invoke(null, 32, 42, 123);
 
-        System.out.println("compiled? = " + WHITE_BOX.isMethodCompiled(checkIndex));
-        System.out.println("level? = " + WHITE_BOX.getMethodCompilationLevel(checkIndex));
-        assertIsCompiled(checkIndex);
-        assertIsCompiled(checkFromToIndex);
-        assertIsCompiled(checkFromIndexSize);
+        compile(checkIndex);
+        compile(checkFromToIndex);
+        compile(checkFromIndexSize);
 
         int[] values = {
                 -1, -2, -10, -100, -1024, -10000, -999999,
