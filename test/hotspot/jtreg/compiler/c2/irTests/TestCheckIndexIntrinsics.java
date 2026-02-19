@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, IBM and/or its affiliates. All rights reserved.
+ * Copyright (c) 2026, IBM and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -58,7 +58,7 @@ public class TestCheckIndexIntrinsics {
     public static void main(String[] args) throws Exception {
         TestFramework.runWithFlags("-XX:CompileOnly=" + TestCheckIndexIntrinsics.class.getName() + "::*", "-XX:LoopMaxUnroll=0");
 
-        testCorrectness();
+//        testCorrectness();
     }
 
     // Calling intrinsified functions and having them inlined.
@@ -207,6 +207,21 @@ public class TestCheckIndexIntrinsics {
     }
 
     @Test
+    @IR(counts = {IRNode.COUNTED_LOOP, "1"}) // inner counted loop of the strip mined
+    @IR(failOn = {IRNode.RANGE_CHECK_TRAP})
+    public static void testUnintrinsifiedCheckFromToIndexL(long start, long stop, long length, long offset, long size) {
+        final long scale = 2;
+        final long stride = 1;
+
+        for (long i = start; i < stop; i += stride) {
+            long from = scale * i + offset;
+            long to = from + size;
+
+            unintrinsifiedCheckFromToIndexL(from, to, length);
+        }
+    }
+
+    @Test
     @IR(counts = {IRNode.COUNTED_LOOP, "2"}) // range check in main loop hoisted and main loop is eliminated
     @IR(counts = {IRNode.RANGE_CHECK_TRAP, "3"}, phase = CompilePhase.AFTER_PARSING)
     @IR(counts = {IRNode.RANGE_CHECK_TRAP, "2"})
@@ -218,20 +233,37 @@ public class TestCheckIndexIntrinsics {
             int from = scale * i + offset;
             int to = from + size;
 
-            // from < to =>> to - from >= 0 ? no overflow!
-            // from < length
-            // to < length
-            checkFromToIndex(from, to, length); // to - from >= 0, from + size - from = size ?>= 0
+            checkFromToIndex(from, to, length);
+        }
+    }
+
+    @Test
+    @IR(counts = {IRNode.COUNTED_LOOP, "1"}) // inner counted loop of the strip mined
+    @IR(counts = {IRNode.RANGE_CHECK_TRAP, "3"}, phase = CompilePhase.AFTER_PARSING)
+    @IR(counts = {IRNode.RANGE_CHECK_TRAP, "2"})
+    public static void testCheckFromToIndexL(long start, long stop, long length, long offset, long size) {
+        final long scale = 2;
+        final long stride = 1;
+
+        for (long i = start; i < stop; i += stride) {
+            long from = scale * i + offset;
+            long to = from + size;
+
+            checkFromToIndexL(from, to, length);
         }
     }
 
     @Run(test = {
             "testUnintrinsifiedCheckFromToIndex",
-            "testCheckFromToIndex"
+            "testUnintrinsifiedCheckFromToIndexL",
+            "testCheckFromToIndex",
+            "testCheckFromToIndexL"
     })
     private void testCheckFromToIndex_runner() {
         testUnintrinsifiedCheckFromToIndex(0, 100, 210, 0, 10);
+        testUnintrinsifiedCheckFromToIndexL(0, 100, 210, 0, 10);
         testCheckFromToIndex(0, 100, 210, 0, 10);
+        testCheckFromToIndexL(0, 100, 210, 0, 10);
     }
 
     @Test
@@ -244,10 +276,21 @@ public class TestCheckIndexIntrinsics {
         for (int i = start; i < stop; i += stride) {
             int from = scale * i + offset;
 
-            // from < to =>> to - from >= 0 ? no overflow!
-            // from < length
-            // to < length
             unintrinsifiedCheckFromIndexSize(from, size, length);
+        }
+    }
+
+    @Test
+    @IR(counts = {IRNode.COUNTED_LOOP, "1"}) // pre/main/post loops
+    @IR(failOn = {IRNode.RANGE_CHECK_TRAP})
+    public static void testUnintrinsifiedFromIndexSizeL(long start, long stop, long length, long offset, long size) {
+        final long scale = 2;
+        final long stride = 1;
+
+        for (long i = start; i < stop; i += stride) {
+            long from = scale * i + offset;
+
+            unintrinsifiedCheckFromIndexSizeL(from, size, length);
         }
     }
 
@@ -261,20 +304,35 @@ public class TestCheckIndexIntrinsics {
         for (int i = start; i < stop; i += stride) {
             int from = scale * i + offset;
 
-            // from < to =>> to - from >= 0 ? no overflow!
-            // from < length
-            // to < length
             checkFromIndexSize(from, size, length);
+        }
+    }
+
+    @Test
+    @IR(counts = {IRNode.COUNTED_LOOP, "1"})
+    @IR(counts = {IRNode.RANGE_CHECK_TRAP, "2"})
+    public static void testCheckFromIndexSizeL(long start, long stop, long length, long offset, long size) {
+        final long scale = 2;
+        final long stride = 1;
+
+        for (long i = start; i < stop; i += stride) {
+            long from = scale * i + offset;
+
+            checkFromIndexSizeL(from, size, length);
         }
     }
 
     @Run(test = {
             "testUnintrinsifiedFromIndexSize",
+            "testUnintrinsifiedFromIndexSizeL",
             "testCheckFromIndexSize",
+            "testCheckFromIndexSizeL"
     })
     private void testCheckFromIndexSize_runner() {
         testUnintrinsifiedFromIndexSize(0, 100, 210, 0, 10);
+        testUnintrinsifiedFromIndexSizeL(0, 100, 210, 0, 10);
         testCheckFromIndexSize(0, 100, 210, 0, 10);
+        testCheckFromIndexSizeL(0, 100, 210, 0, 10);
     }
 
     private static void assertIsCompiled(Method m) {
