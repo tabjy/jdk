@@ -33,6 +33,7 @@ import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.Objects;
 import java.util.Random;
+import java.util.stream.Stream;
 
 import compiler.whitebox.CompilerWhiteBoxTest;
 import jdk.test.lib.Utils;
@@ -73,15 +74,15 @@ public class TestCheckIndexIntrinsics {
         return Objects.checkFromIndexSize(fromIndex, size, length);
     }
 
-    public static long checkIndex(long index, long length) {
+    public static long checkIndexL(long index, long length) {
         return Objects.checkIndex(index, length);
     }
 
-    public static long checkFromToIndex(long fromIndex, long toIndex, long length) {
+    public static long checkFromToIndexL(long fromIndex, long toIndex, long length) {
         return Objects.checkFromToIndex(fromIndex, toIndex, length);
     }
 
-    public static long checkFromIndexSize(long fromIndex, long size, long length) {
+    public static long checkFromIndexSizeL(long fromIndex, long size, long length) {
         return Objects.checkFromIndexSize(fromIndex, size, length);
     }
 
@@ -173,7 +174,7 @@ public class TestCheckIndexIntrinsics {
         final long stride = 1;
 
         for (long i = start; i < stop; i += stride) {
-            checkIndex(scale * i + offset, length);
+            checkIndexL(scale * i + offset, length);
         }
     }
 
@@ -303,11 +304,21 @@ public class TestCheckIndexIntrinsics {
         }
     }
 
-    private static void testShouldThrow(String method, Object[] compileArgs, Object[] args) throws Exception {
+    private static void testShouldThrow(Method method, Object[] args) throws Exception {
         Class<?> c = newClassLoader().loadClass(TestCheckIndexIntrinsics.class.getName());
-        Method m = args.length == 2
-                ? c.getDeclaredMethod(method, int.class, int.class)
-                : c.getDeclaredMethod(method, int.class, int.class, int.class);
+        String methodName = method.getName();
+        Class<?> type = method.getReturnType();
+
+        Method m = method.getParameterCount() == 2
+                ? c.getDeclaredMethod(methodName, type, type)
+                : c.getDeclaredMethod(methodName, type, type, type);
+        Object[] compileArgs = method.getParameterCount() == 2
+                ? new Object[]{1, 2}
+                : new Object[]{1, 2, 3};
+
+        if (type == long.class) {
+            compileArgs = Stream.of(compileArgs).map(i -> ((Integer) i).longValue()).toArray(Object[]::new);
+        }
 
         assertIsNotCompiled(m);
 
@@ -331,7 +342,7 @@ public class TestCheckIndexIntrinsics {
         throw new AssertionError(String.format("%s(%s): should have thrown", method, Arrays.toString(args)));
     }
 
-    private static void assertEqual(Method groundTruth, Method intrinsified, String method, Object[] compileArgs, Object[] args)
+    private static void assertEqual(Method groundTruth, Method intrinsified, Object[] args)
             throws Exception {
         boolean oob = false;
         Object expected = null;
@@ -346,7 +357,7 @@ public class TestCheckIndexIntrinsics {
         }
 
         if (oob) {
-            testShouldThrow(method, compileArgs, args);
+            testShouldThrow(intrinsified, args);
         } else {
             Object observed = intrinsified.invoke(null, args);
             if (!expected.equals(observed)) {
@@ -362,44 +373,140 @@ public class TestCheckIndexIntrinsics {
         Method checkFromToIndex = TestCheckIndexIntrinsics.class.getDeclaredMethod("checkFromToIndex", int.class, int.class, int.class);
         Method checkFromIndexSize = TestCheckIndexIntrinsics.class.getDeclaredMethod("checkFromIndexSize", int.class, int.class, int.class);
 
+        Method checkIndexL = TestCheckIndexIntrinsics.class.getDeclaredMethod("checkIndexL", long.class, long.class);
+        Method checkFromToIndexL = TestCheckIndexIntrinsics.class.getDeclaredMethod("checkFromToIndexL", long.class, long.class, long.class);
+        Method checkFromIndexSizeL = TestCheckIndexIntrinsics.class.getDeclaredMethod("checkFromIndexSizeL", long.class, long.class, long.class);
+
+        Method unintrinsifiedCheckIndex = TestCheckIndexIntrinsics.class.getDeclaredMethod("unintrinsifiedCheckIndex", int.class, int.class);
+        Method unintrinsifiedCheckFromToIndex = TestCheckIndexIntrinsics.class.getDeclaredMethod("unintrinsifiedCheckFromToIndex", int.class, int.class, int.class);
+        Method unintrinsifiedCheckFromIndexSize = TestCheckIndexIntrinsics.class.getDeclaredMethod("unintrinsifiedCheckFromIndexSize", int.class, int.class, int.class);
+
+        Method unintrinsifiedCheckIndexL = TestCheckIndexIntrinsics.class.getDeclaredMethod("unintrinsifiedCheckIndexL", long.class, long.class);
+        Method unintrinsifiedCheckFromToIndexL = TestCheckIndexIntrinsics.class.getDeclaredMethod("unintrinsifiedCheckFromToIndexL", long.class, long.class, long.class);
+        Method unintrinsifiedCheckFromIndexSizeL = TestCheckIndexIntrinsics.class.getDeclaredMethod("unintrinsifiedCheckFromIndexSizeL", long.class, long.class, long.class);
+
         checkIndex.invoke(null, 0, 42);
         checkFromToIndex.invoke(null, 1, 16, 42);
         checkFromIndexSize.invoke(null, 32, 42, 123);
+
+        checkIndexL.invoke(null, 0, 42);
+        checkFromToIndexL.invoke(null, 1, 16, 42);
+        checkFromIndexSizeL.invoke(null, 32, 42, 123);
 
         compile(checkIndex);
         compile(checkFromToIndex);
         compile(checkFromIndexSize);
 
-        int[] values = {
-                -1, -2, -10, -100, -1024, -10000, -999999,
-                0, 1, 2, 42, 64, 100, 123, 1024, 0xC0FFEE,
-                Integer.MAX_VALUE - 1, Integer.MAX_VALUE, Integer.MIN_VALUE + 1, Integer.MIN_VALUE,
-                RNG.nextInt(), RNG.nextInt(), RNG.nextInt(), RNG.nextInt()
-        };
+        compile(checkIndexL);
+        compile(checkFromToIndexL);
+        compile(checkFromIndexSizeL);
 
-        for (int i : values) {
-            for (int j : values) {
-                for (int k : values) {
-                    assertEqual(
-                            TestCheckIndexIntrinsics.class.getDeclaredMethod("unintrinsifiedCheckIndex", int.class, int.class),
-                            checkIndex,
-                            "checkIndex",
-                            new Object[]{0, 42},
-                            new Object[]{i, j});
+        // 0 for int, 1 for long
+        for (int type : new int[]{0, 1}) {
+            long min = type == 0 ? Integer.MIN_VALUE : Long.MIN_VALUE;
+            long max = type == 0 ? Integer.MAX_VALUE : Long.MAX_VALUE;
 
-                    assertEqual(
-                            TestCheckIndexIntrinsics.class.getDeclaredMethod("unintrinsifiedCheckFromToIndex", int.class, int.class, int.class),
-                            checkFromToIndex,
-                            "checkFromToIndex",
-                            new Object[]{1, 16, 42},
-                            new Object[]{i, j, k});
+            long[][] inputs;
+            inputs = new long[][]{
+                    {0, 1},
+                    {2, 5},
+                    {9, 10},
+                    {0, max},
+                    {max - 1, max},
 
-                    assertEqual(
-                            TestCheckIndexIntrinsics.class.getDeclaredMethod("unintrinsifiedCheckFromIndexSize", int.class, int.class, int.class),
-                            checkFromIndexSize,
-                            "checkFromIndexSize",
-                            new Object[]{32, 42, 123},
-                            new Object[]{i, j, k});
+                    // should throw:
+                    {-1, 5}, // index < 0
+                    {5, 5},  // index == length
+                    {6, 5},  // index > length
+                    {0, 0},  // length = 0, no valid index
+                    {2, -1}, // length < 0
+                    {min, 5},
+                    {5, min},
+                    {max, max},
+            };
+            for (long[] input : inputs) {
+                if (type == 0) {
+                    assertEqual(unintrinsifiedCheckIndex, checkIndex, new Object[]{(int) input[0], (int) input[1]});
+                } else {
+                    assertEqual(unintrinsifiedCheckIndexL, checkIndexL, new Object[]{input[0], input[1]});
+                }
+            }
+
+            inputs = new long[][]{
+                    {0, 0, 5},
+                    {0, 5, 5},
+                    {2, 4, 5},
+                    {5, 5, 5},
+                    {0, 0, 0},
+                    {0, max, max},
+                    {max, max, max},
+                    {max - 1, max, max},
+
+                    // should throw:
+                    {-1, 2, 5},  // fromIndex < 0
+                    {3, 2, 5},   // fromIndex > toIndex (range inverted)
+                    {2, 6, 5},   // toIndex > length (out of bounds)
+                    {2, 4, -1},  // length < 0
+                    {1, 0, 0},   // Out of bounds for zero length
+                    {min, 5, 10},
+                    {max, 0, max}
+            };
+            for (long[] input : inputs) {
+                if (type == 0) {
+                    assertEqual(unintrinsifiedCheckFromToIndex, checkFromToIndex, new Object[]{(int) input[0], (int) input[1], (int) input[2]});
+                } else {
+                    assertEqual(unintrinsifiedCheckFromToIndexL, checkFromToIndexL, new Object[]{input[0], input[1], input[2]});
+                }
+            }
+
+            inputs = new long[][]{
+                    {0, 0, 5},
+                    {0, 5, 5},
+                    {2, 2, 5},
+                    {5, 0, 5},
+                    {0, 0, 0},
+                    {0, Integer.MAX_VALUE, Integer.MAX_VALUE},
+                    {Integer.MAX_VALUE, 0, Integer.MAX_VALUE},
+                    {Integer.MAX_VALUE - 1, 1, Integer.MAX_VALUE},
+
+                    // should throw:
+                    {-1, 2, 5},  // fromIndex < 0
+                    {2, -1, 5},  // size < 0
+                    {2, 4, 5},   // fromIndex + size > length (2 + 4 = 6 > 5)
+                    {6, 0, 5},   // fromIndex > length
+                    {2, 2, -1},   // length < 0
+                    {1, Integer.MAX_VALUE, Integer.MAX_VALUE},
+                    {Integer.MAX_VALUE, 1, Integer.MAX_VALUE},
+                    {Integer.MAX_VALUE, Integer.MAX_VALUE, Integer.MAX_VALUE},
+                    {Integer.MAX_VALUE / 2 + 1, Integer.MAX_VALUE / 2 + 1, Integer.MAX_VALUE}
+            };
+            for (long[] input : inputs) {
+                if (type == 0) {
+                    assertEqual(unintrinsifiedCheckFromIndexSize, checkFromIndexSize, new Object[]{(int) input[0], (int) input[1], (int) input[2]});
+                } else {
+                    assertEqual(unintrinsifiedCheckFromIndexSizeL, checkFromIndexSizeL, new Object[]{input[0], input[1], input[2]});
+                }
+            }
+
+            // a couple of randoms for good measure
+            long[] values = {
+                    -1024, -1, 0, 42, 0xC0FFEE,
+                    RNG.nextLong(), RNG.nextLong(), RNG.nextLong()
+            };
+
+            for (long i : values) {
+                for (long j : values) {
+                    for (long k : values) {
+                        if (type == 0) {
+                            assertEqual(unintrinsifiedCheckIndex, checkIndex, new Object[]{(int) i, (int) j});
+                            assertEqual(unintrinsifiedCheckFromToIndex, checkFromToIndex, new Object[]{(int) i, (int) j, (int) k});
+                            assertEqual(unintrinsifiedCheckFromIndexSize, checkFromIndexSize, new Object[]{(int) i, (int) j, (int) k});
+                        } else {
+                            assertEqual(unintrinsifiedCheckIndexL, checkIndexL, new Object[]{i, j});
+                            assertEqual(unintrinsifiedCheckFromToIndexL, checkFromToIndexL, new Object[]{i, j, k});
+                            assertEqual(unintrinsifiedCheckFromIndexSizeL, checkFromIndexSizeL, new Object[]{i, j, k});
+                        }
+                    }
                 }
             }
         }
