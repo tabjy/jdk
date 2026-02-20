@@ -523,9 +523,9 @@ public class TestCheckIndexIntrinsics {
                     {2, 2, 5},
                     {5, 0, 5},
                     {0, 0, 0},
-                    {0, Integer.MAX_VALUE, Integer.MAX_VALUE},
-                    {Integer.MAX_VALUE, 0, Integer.MAX_VALUE},
-                    {Integer.MAX_VALUE - 1, 1, Integer.MAX_VALUE},
+                    {0, max, max},
+                    {max, 0, max},
+                    {max - 1, 1, max},
 
                     // should throw:
                     {-1, 2, 5},  // fromIndex < 0
@@ -533,10 +533,10 @@ public class TestCheckIndexIntrinsics {
                     {2, 4, 5},   // fromIndex + size > length (2 + 4 = 6 > 5)
                     {6, 0, 5},   // fromIndex > length
                     {2, 2, -1},   // length < 0
-                    {1, Integer.MAX_VALUE, Integer.MAX_VALUE},
-                    {Integer.MAX_VALUE, 1, Integer.MAX_VALUE},
-                    {Integer.MAX_VALUE, Integer.MAX_VALUE, Integer.MAX_VALUE},
-                    {Integer.MAX_VALUE / 2 + 1, Integer.MAX_VALUE / 2 + 1, Integer.MAX_VALUE}
+                    {1, max, max},
+                    {max, 1, max},
+                    {max, max, max},
+                    {max / 2 + 1, max / 2 + 1, max}
             };
             for (long[] input : inputs) {
                 if (type == 0) {
