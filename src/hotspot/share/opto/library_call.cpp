@@ -1152,11 +1152,12 @@ bool LibraryCallKit::inline_countPositives() {
   return true;
 }
 
-Node* insert_positive_check(LibraryCallKit& kit, Node* target, BasicType bt) {
+Node* insert_non_negative_check(LibraryCallKit& kit, Node* target, BoolTest::mask mask, BasicType bt) {
+  assert(mask == BoolTest::gt || mask == BoolTest::ge, "");
   PhaseGVN& gvn = kit.gvn();
 
   Node* cmp = gvn.transform(CmpNode::make(target, kit.integercon(0, bt), bt));
-  Node* bol = gvn.transform(new BoolNode(cmp, BoolTest::ge));
+  Node* bol = gvn.transform(new BoolNode(cmp, mask));
 
   {
     BuildCutout unless(&kit, bol, PROB_MAX);
@@ -1171,9 +1172,8 @@ Node* insert_positive_check(LibraryCallKit& kit, Node* target, BasicType bt) {
   // target is now known positive, add a cast node to make this explicit
   jlong upper_bound = gvn.type(target)->is_integer(bt)->hi_as_long();
 
-  // FIXME: why is this casting inside main loop?
   Node* casted = ConstraintCastNode::make_cast_for_basic_type(
-      kit.control(), target, TypeInteger::make(0, upper_bound, Type::WidenMax, bt),
+      kit.control(), target, TypeInteger::make(mask == BoolTest::ge ? 0 : 1, upper_bound, Type::WidenMax, bt),
       ConstraintCastNode::DependencyType::FloatingNarrowing, bt);
   return gvn.transform(casted);
 }
@@ -1251,19 +1251,21 @@ bool LibraryCallKit::inline_preconditions_checkFromToIndex_helper(Node* from, No
   Node* casted_from = nullptr;
   Node* casted_to = nullptr;
   Node* casted_size = nullptr;
-  Node* casted_length = nullptr;
+  Node* casted_length_plus_one = nullptr;
 
   // Check that all arguments are positive. Note that even the following are logically equivalent to
   // (from|to|length) >= 0 or (from|size|length) >= 0, we're checking them separately to allow branch elimination in
   // case only one or two of them can be deduced.
   // Note: we don't need to explicitly check `from >= 0` is positive since `from u<= length` later implies it.
   if (to != nullptr) {
-    casted_to = insert_positive_check(*this, to, bt);
+    casted_to = insert_non_negative_check(*this, to, BoolTest::ge, bt);
   }
   if (size != nullptr) {
-    casted_size = insert_positive_check(*this, size, bt);
+    casted_size = insert_non_negative_check(*this, size, BoolTest::ge, bt);
   }
-  casted_length = insert_positive_check(*this, length, bt);
+
+  Node* length_plus_one = _gvn.transform(AddNode::make(length, _gvn.integercon(1, bt), bt));
+  casted_length_plus_one = insert_non_negative_check(*this, length_plus_one, BoolTest::gt, bt); // TODO: length >= 0 --> (length + 1) > 0
 
   if (stopped()) {
     // At least one argument is known to be always negative during compilation and the IR graph so far constructed is
@@ -1290,7 +1292,8 @@ bool LibraryCallKit::inline_preconditions_checkFromToIndex_helper(Node* from, No
   // We have checked there could be at least one more range check trap
 
   // We don't want to use `casted_length` for range checks since range check elimination cannot pick up this pattern.
-  casted_from = insert_unsigned_range_check(*this, from, length, BoolTest::le, bt);
+  // TODO: from <= length --> from < (length + 1)
+  casted_from = insert_unsigned_range_check(*this, from, casted_length_plus_one, BoolTest::lt, bt);
   if (casted_from == nullptr) {
     return true; // `from` is known always greater than `length` during compilation.
   }
@@ -1332,7 +1335,8 @@ bool LibraryCallKit::inline_preconditions_checkFromToIndex_helper(Node* from, No
   }
 
   // Similarly, use the original, uncasted `to` and `length` for range checks.
-  casted_to = insert_unsigned_range_check(*this, to, length, BoolTest::le, bt);
+  // TODO: to <= length --> to < (length + 1)
+  casted_to = insert_unsigned_range_check(*this, to, casted_length_plus_one, BoolTest::lt, bt);
   if  (casted_to == nullptr) {
     return true; // `to` is always greater than `length`.
   }
@@ -1346,7 +1350,9 @@ bool LibraryCallKit::inline_preconditions_checkFromToIndex_helper(Node* from, No
   if (casted_size != nullptr) {
     replace_in_map(size, casted_size);
   }
-  replace_in_map(length, casted_length);
+
+  // TODO: might as well refine length type
+  // replace_in_map(length, casted_length);
 
 
   return true;
@@ -1454,7 +1460,7 @@ bool LibraryCallKit::inline_preconditions_checkIndex(BasicType bt) {
   }
 
   // Check that length is positive
-  Node* casted_length = insert_positive_check(*this, length, bt);
+  Node* casted_length = insert_non_negative_check(*this, length, BoolTest::ge, bt);
   if (casted_length == nullptr) {
     // Length is known to be always negative during compilation and the IR graph so far constructed is good so return
     // success

@@ -569,4 +569,122 @@ public class TestCheckIndexIntrinsics {
             }
         }
     }
+
+    static abstract class Buffer {
+        //        static Buffer buffer(int size) {
+        //            return new BufferImpl(size);
+        //        }
+
+        abstract void setByte(int index, byte b);
+
+        abstract byte getByte(int index);
+    }
+
+    static class BufferImplBytecode extends Buffer {
+        ByteBuffer buffer;
+
+        BufferImplBytecode(int size) {
+            buffer = ByteBuffer.heapBuffer(size);
+        }
+
+        void setByte(int index, byte b) {
+            // ensureLength
+            buffer.setByte(index, b);
+        }
+
+        @Override
+        byte getByte(int index) {
+            checkUpperBound(index, 1);
+            return buffer.getByte(index);
+        }
+
+        int checkFromIndexSize(int fromIndex, int size, int length) {
+            if ((length | fromIndex | size) < 0 || size > length - fromIndex)
+                throw new IndexOutOfBoundsException("obb");
+            return fromIndex;
+        }
+
+        private void checkUpperBound(int index, int size) {
+            int length = buffer.writerIndex();
+
+            checkFromIndexSize(index, size, length);
+        }
+    }
+
+    static class BufferImplIntrinsified extends Buffer {
+        ByteBuffer buffer;
+
+        BufferImplIntrinsified(int size) {
+            buffer = ByteBuffer.heapBuffer(size);
+        }
+
+        void setByte(int index, byte b) {
+            // ensureLength
+            buffer.setByte(index, b);
+        }
+
+        @Override
+        byte getByte(int index) {
+            checkUpperBound(index, 1);
+            return buffer.getByte(index);
+        }
+
+        private void checkUpperBound(int index, int size) {
+            int length = buffer.writerIndex();
+
+            Objects.checkFromIndexSize(index, size, length);
+        }
+    }
+
+    static class ByteBuffer {
+        byte[] bytes;
+
+        ByteBuffer(int size) {
+            bytes = new byte[size];
+        }
+
+        static ByteBuffer heapBuffer(int size) {
+            return new ByteBuffer(size);
+        }
+
+        public void setByte(int index, byte b) {
+            this.bytes[index] = b;
+        }
+
+        public byte getByte(int index) {
+            return bytes[index];
+        }
+
+        int writerIndex() {
+            return bytes.length;
+        }
+    }
+
+//    @Test
+//    public void bytecodeBuffer(Blackhole bh) {
+//        Buffer buffer = this.bytecodeBuffer;
+//        for (int i = 0, size = batchSize; i < size; i++) {
+//            bh.consume(buffer.getByte(i));
+//        }
+//    }
+
+    int batchSize;
+    {
+        batchSize = 64;
+    }
+    Buffer intrinsifiedBuffer = new BufferImplIntrinsified(batchSize);
+
+
+    @Test
+    @IR
+    public int intrinsifiedBuffer() {
+        int acc = 0;
+
+        Buffer buffer = this.intrinsifiedBuffer;
+        for (int i = 0, size = batchSize; i < size; i++) {
+            acc += buffer.getByte(i);
+        }
+
+        return acc;
+    }
 }
