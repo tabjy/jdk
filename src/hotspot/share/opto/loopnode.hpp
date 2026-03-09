@@ -2051,7 +2051,7 @@ public:
   ConNode* zerocon(BasicType bt);
 };
 
-class CountedLoopConverter : public StackObj {
+class CountedLoopConverter {
   friend class PhaseIdealLoop;
 
   // Match increment with optional truncation
