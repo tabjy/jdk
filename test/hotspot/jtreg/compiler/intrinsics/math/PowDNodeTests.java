@@ -102,15 +102,15 @@ public class PowDNodeTests {
         return Math.pow(b, 2.0);
     }
 
-    // Test 6: pow(b, 0.5) -> b < 0.0 ? pow(b, 0.5) : sqrt(b)
+    // Test 6: pow(b, 0.5) -> b <= 0.0 ? pow(b, 0.5) : sqrt(b)
     // More tests in TestPow0Dot5Opt.java
     @Test
     @IR(counts = {IRNode.IF, "1"})
     @IR(counts = {IRNode.SQRT_D, "1"})
-    @IR(counts = {IRNode.POW_D, "1"})
+    @IR(counts = {IRNode.START + "CallLeaf" + IRNode.MID + "pow" + " " + IRNode.END, "1"}, phase = CompilePhase.BEFORE_MATCHING)
     @Arguments(values = {Argument.RANDOM_EACH})
     public static double expDot5(double b) {
-        return Math.pow(b, 0.5);
+        return Math.pow(b, 0.5); // expand to: if (b > 0) { sqrt(b) } else { call(b) }
     }
 
     // Test 7: non-constant exponent stays as call
