@@ -25,7 +25,6 @@
 #ifndef SHARE_OPTO_SUBNODE_HPP
 #define SHARE_OPTO_SUBNODE_HPP
 
-#include "opto/callnode.hpp"
 #include "opto/node.hpp"
 #include "opto/opcodes.hpp"
 #include "opto/type.hpp"

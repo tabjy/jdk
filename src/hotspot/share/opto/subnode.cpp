@@ -45,8 +45,6 @@
 // Optimization - Graph Style
 
 #include "math.h"
-#include "runtime.hpp"
-#include "runtime/stubRoutines.hpp"
 
 //=============================================================================
 //------------------------------Identity---------------------------------------
