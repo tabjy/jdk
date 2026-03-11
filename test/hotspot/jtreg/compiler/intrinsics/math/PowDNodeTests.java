@@ -83,7 +83,7 @@ public class PowDNodeTests {
         return Math.pow(b, 1.0);
     }
 
-    // Test 3: pow(b, 0.0) -> 1.0
+    // Test 5: pow(b, NaN) -> NaN
     @Test
     @IR(failOn = {IRNode.POW_D})
     @IR(counts = {IRNode.CON_D, "1"})
@@ -92,7 +92,7 @@ public class PowDNodeTests {
         return Math.pow(b, Double.NaN);
     }
 
-    // Test 5: pow(b, 2.0) -> b * b
+    // Test 6: pow(b, 2.0) -> b * b
     // More tests in TestPow2Opt.java
     @Test
     @IR(failOn = {IRNode.POW_D, IRNode.CON_D})
@@ -102,7 +102,7 @@ public class PowDNodeTests {
         return Math.pow(b, 2.0);
     }
 
-    // Test 6: pow(b, 0.5) -> b <= 0.0 ? pow(b, 0.5) : sqrt(b)
+    // Test 7: pow(b, 0.5) -> b <= 0.0 ? pow(b, 0.5) : sqrt(b)
     // More tests in TestPow0Dot5Opt.java
     @Test
     @IR(counts = {IRNode.IF, "1"})
@@ -113,7 +113,7 @@ public class PowDNodeTests {
         return Math.pow(b, 0.5); // expand to: if (b > 0) { sqrt(b) } else { call(b) }
     }
 
-    // Test 7: non-constant exponent stays as call
+    // Test 8: non-constant exponent stays as call
     @Test
     @IR(counts = {IRNode.POW_D, "1"})
     @Arguments(values = {Argument.RANDOM_EACH, Argument.RANDOM_EACH})
@@ -121,7 +121,7 @@ public class PowDNodeTests {
         return Math.pow(b, e);
     }
 
-    // Test 8: late constant discovery on base (after loop opts)
+    // Test 9: late constant discovery on base (after loop opts)
     @Test
     @IR(counts = {IRNode.POW_D, "1"}, phase = CompilePhase.AFTER_PARSING)
     @IR(failOn = {IRNode.POW_D})
@@ -136,7 +136,7 @@ public class PowDNodeTests {
         return Math.pow(base, E);
     }
 
-    // Test 9: late constant discovery on exp (after loop opts)
+    // Test 10: late constant discovery on exp (after loop opts)
     @Test
     @IR(counts = {IRNode.POW_D, "1"}, phase = CompilePhase.AFTER_PARSING)
     @IR(failOn = {IRNode.POW_D})
@@ -151,7 +151,7 @@ public class PowDNodeTests {
         return Math.pow(B, exp);
     }
 
-    // Test 10: late constant discoveries on both base and exp (after loop opts)
+    // Test 11: late constant discoveries on both base and exp (after loop opts)
     @Test
     @IR(counts = {IRNode.POW_D, "1"}, phase = CompilePhase.AFTER_PARSING)
     @IR(failOn = {IRNode.POW_D})
@@ -171,7 +171,7 @@ public class PowDNodeTests {
         if (Double.isNaN(expected) && Double.isNaN(observed)) return;
 
         // Math.pow() requires result must be within 1 ulp of the respective magnitude
-        double ulp = Math.max(Math.ulp(expected), Math.ulp(Math.ulp(observed)));
+        double ulp = Math.max(Math.ulp(expected), Math.ulp(observed));
         if (Math.abs(expected - observed) > ulp) {
             throw new AssertionError(String.format(
                     "expect = %x, observed = %x, ulp = %x",

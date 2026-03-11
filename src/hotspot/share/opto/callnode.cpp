@@ -1369,7 +1369,7 @@ TupleNode* CallLeafPureNode::make_tuple_of_input_state_and_top_return_values(con
 }
 
 CallLeafPureNode* CallLeafPureNode::inline_call_leaf_pure_node(Node* control) const {
-  Node* top = Compile::current()->C->top();
+  Node* top = Compile::current()->top();
   if (control == nullptr) {
     control = in(TypeFunc::Control);
   }
@@ -2521,7 +2521,7 @@ Node* PowDNode::Ideal(PhaseGVN* phase, bool can_reshape) {
 
     // If the second argument is NaN, then the result is NaN.
     // i.e., pow(x, NaN) => NaN
-    if (isnan(e)) {
+    if (g_isnan(e)) {
       return make_tuple_of_input_state_and_result(igvn, phase->makecon(TypeD::make(NAN)));
     }
 
