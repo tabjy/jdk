@@ -2476,20 +2476,41 @@ const Type *PowDNode::Value(PhaseGVN *phase) const {
     return Type::TOP;
   }
 
-  // constant folding: both inputs are constants
   const TypeD* base_con = t_base->isa_double_constant();
   const TypeD* exp_con  = t_exp->isa_double_constant();
-  if (base_con == nullptr || exp_con == nullptr) {
-    return tf()->range();
+  const TypeD* result_t = nullptr;
+
+  // constant folding: both inputs are constants
+  if (base_con != nullptr && exp_con != nullptr) {
+    result_t = TypeD::make(SharedRuntime::dpow(base_con->getd(), exp_con->getd()));
   }
 
-  const double result = SharedRuntime::dpow(base_con->getd(), exp_con->getd());
+  // Special cases when only the exponent is known:
+  if (exp_con != nullptr) {
+    double e = exp_con->getd();
 
-  // We can't simply return a TypeD here, it must be a tuple type to be compatible with call nodes.
-  const Type** fields = TypeTuple::fields(2);
-  fields[TypeFunc::Parms + 0] = TypeD::make(result);
-  fields[TypeFunc::Parms + 1] = Type::HALF;
-  return TypeTuple::make(TypeFunc::Parms + 2, fields);
+    // If the second argument is positive or negative zero, then the result is 1.0.
+    // i.e., pow(x, +/-0.0D) => 1.0
+    if (e == 0.0) { // true for both -0.0 and +0.0
+      result_t = TypeD::ONE;
+    }
+
+    // If the second argument is NaN, then the result is NaN.
+    // i.e., pow(x, NaN) => NaN
+    if (g_isnan(e)) {
+      result_t = TypeD::make(NAN);
+    }
+  }
+
+  if (result_t != nullptr) {
+    // We can't simply return a TypeD here, it must be a tuple type to be compatible with call nodes.
+    const Type** fields = TypeTuple::fields(2);
+    fields[TypeFunc::Parms + 0] = result_t;
+    fields[TypeFunc::Parms + 1] = Type::HALF;
+    return TypeTuple::make(TypeFunc::Parms + 2, fields);
+  }
+
+  return tf()->range();
 }
 
 Node* PowDNode::Ideal(PhaseGVN* phase, bool can_reshape) {
@@ -2507,22 +2528,11 @@ Node* PowDNode::Ideal(PhaseGVN* phase, bool can_reshape) {
   // Special cases when only the exponent is known:
   if (exp_con != nullptr) {
     double e = exp_con->getd();
-    // If the second argument is positive or negative zero, then the result is 1.0.
-    // i.e., pow(x, +/-0.0D) => 1.0
-    if (e == 0.0) { // true for both -0.0 and +0.0
-      return make_tuple_of_input_state_and_result(igvn, phase->makecon(TypeD::ONE));
-    }
 
     // If the second argument is 1.0, then the result is the same as the first argument.
     // i.e., pow(x, 1.0) => x
     if (e == 1.0) {
       return make_tuple_of_input_state_and_result(igvn, base);
-    }
-
-    // If the second argument is NaN, then the result is NaN.
-    // i.e., pow(x, NaN) => NaN
-    if (g_isnan(e)) {
-      return make_tuple_of_input_state_and_result(igvn, phase->makecon(TypeD::make(NAN)));
     }
 
     // If the second argument is 2.0, then strength reduce to multiplications.
