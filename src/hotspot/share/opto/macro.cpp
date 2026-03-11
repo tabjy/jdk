@@ -2658,9 +2658,9 @@ bool PhaseMacroExpand::expand_macro_nodes() {
       case Op_ModD:
       case Op_ModF:
       case Op_PowD: {
-        CallLeafPureNode* mod_macro = n->as_CallLeafPure();
-        CallLeafPureNode* call = mod_macro->inline_call_leaf_pure_node();
-        _igvn.replace_node(mod_macro, call);
+        CallLeafPureNode* call_macro = n->as_CallLeafPure();
+        CallLeafPureNode* call = call_macro->inline_call_leaf_pure_node();
+        _igvn.replace_node(call_macro, call);
         transform_later(call);
         break;
       }
