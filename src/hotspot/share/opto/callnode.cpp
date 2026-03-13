@@ -2468,7 +2468,7 @@ PowDNode::PowDNode(Compile* C, Node* base, Node* exp)
   init_req(TypeFunc::Parms + 3, C->top());  // double slot padding
 }
 
-const Type *PowDNode::Value(PhaseGVN *phase) const {
+const Type* PowDNode::Value(PhaseGVN* phase) const {
   const Type* t_base = phase->type(base());
   const Type* t_exp  = phase->type(exp());
 
@@ -2561,19 +2561,19 @@ Node* PowDNode::Ideal(PhaseGVN* phase, bool can_reshape) {
 
       // slow path: call pow(x, 0.5)
       Node* call = igvn->register_new_node_with_optimizer(inline_call_leaf_pure_node(if_slow));
-      Node *call_ctrl = igvn->register_new_node_with_optimizer(new ProjNode(call, TypeFunc::Control));
-      Node *call_result = igvn->register_new_node_with_optimizer(new ProjNode(call, TypeFunc::Parms + 0));
+      Node* call_ctrl = igvn->register_new_node_with_optimizer(new ProjNode(call, TypeFunc::Control));
+      Node* call_result = igvn->register_new_node_with_optimizer(new ProjNode(call, TypeFunc::Parms + 0));
 
       // fast path: sqrt(x)
-      Node *sqrt = igvn->register_new_node_with_optimizer(new SqrtDNode(igvn->C, if_fast, base));
+      Node* sqrt = igvn->register_new_node_with_optimizer(new SqrtDNode(igvn->C, if_fast, base));
 
       // merge paths
-      RegionNode *region = new RegionNode(3);
+      RegionNode* region = new RegionNode(3);
       igvn->register_new_node_with_optimizer(region);
       region->init_req(1, call_ctrl); // slow path
       region->init_req(2, if_fast);   // fast path
 
-      PhiNode *phi = new PhiNode(region, Type::DOUBLE);
+      PhiNode* phi = new PhiNode(region, Type::DOUBLE);
       igvn->register_new_node_with_optimizer(phi);
       phi->init_req(1, call_result); // slow: pow() result
       phi->init_req(2, sqrt);        // fast: sqrt() result

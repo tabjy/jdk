@@ -1308,9 +1308,9 @@ class PowDNode : public CallLeafPureNode {
 
 public:
   PowDNode(Compile* C, Node* base, Node* exp);
-  virtual int Opcode() const;
-  virtual const Type *Value(PhaseGVN *phase) const;
-  virtual Node* Ideal(PhaseGVN* phase, bool can_reshape);
+  int Opcode() const override;
+  const Type* Value(PhaseGVN* phase) const override;
+  Node* Ideal(PhaseGVN* phase, bool can_reshape) override;
 
   Node* base() const { return in(TypeFunc::Parms + 0); }
   Node* exp() const  { return in(TypeFunc::Parms + 2); }
