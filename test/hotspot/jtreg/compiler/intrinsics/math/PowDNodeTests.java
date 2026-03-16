@@ -191,7 +191,8 @@ public class PowDNodeTests {
         assertEQWithinOneUlp(BE, lateBothConstant());
 
         double[] values = {
-                Double.NEGATIVE_INFINITY, -42.0d, -0.0d, +0.0d, 0.5d, 1.0d, 2.0d, 123, Double.POSITIVE_INFINITY, Double.NaN,
+                Double.MIN_VALUE, Double.MIN_NORMAL, -42.0d, -1.0d, -0.0d, +0.0d, 0.5d, 1.0d, 2.0d, 123d, Double.MAX_VALUE,
+                Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY, Double.NaN,
                 // some sufficiently large magnitudes
                 (double) RNG.nextLong(Integer.MAX_VALUE, Long.MAX_VALUE), // >=  2^31
                 (double) RNG.nextLong(Long.MIN_VALUE, Integer.MIN_VALUE), // <= -2^31
