@@ -1374,6 +1374,7 @@ public:
 
     bool should_include_limit() const { return _mask == BoolTest::le || _mask == BoolTest::ge; }
 
+    const Node* back_control() const { return _back_control; }
     CmpNode* cmp() const { return _cmp->as_Cmp(); }
     Node* incr() const { return _incr; }
     Node* limit() const { return _limit; }
@@ -2165,6 +2166,8 @@ class CountedLoopConverter {
   SafePointNode* find_safepoint(Node* iftrue);
   bool is_safepoint_invalid(SafePointNode* sfpt) const;
 
+  ParsePredicateNode* parse_predicate() const;
+
  public:
   CountedLoopConverter(PhaseIdealLoop* phase, Node* head, IdealLoopTree* loop, const BasicType iv_bt)
       : _phase(phase),
@@ -2179,6 +2182,7 @@ class CountedLoopConverter {
   }
 
   bool is_counted_loop();
+  bool try_reconfigure_for_speculative_long_limit();
   IdealLoopTree* convert();
 
   DEBUG_ONLY(bool should_stress_long_counted_loop();)
