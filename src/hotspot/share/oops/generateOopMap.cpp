@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,7 +22,6 @@
  *
  */
 
-#include "precompiled.hpp"
 #include "classfile/vmSymbols.hpp"
 #include "interpreter/bytecodeStream.hpp"
 #include "logging/log.hpp"
@@ -392,7 +391,6 @@ void CellTypeState::print(outputStream *os) {
 //
 
 void GenerateOopMap::initialize_bb() {
-  _gc_points = 0;
   _bb_count  = 0;
   _bb_hdr_bits.reinitialize(method()->code_size());
 }
@@ -410,7 +408,7 @@ void GenerateOopMap::bb_mark_fct(GenerateOopMap *c, int bci, int *data) {
 }
 
 
-void GenerateOopMap::mark_bbheaders_and_count_gc_points() {
+void GenerateOopMap::mark_bbheaders() {
   initialize_bb();
 
   bool fellThrough = false;  // False to get first BB marked.
@@ -446,9 +444,6 @@ void GenerateOopMap::mark_bbheaders_and_count_gc_points() {
       default:
         break;
     }
-
-    if (possible_gc_point(&bcs))
-      _gc_points++;
   }
 }
 
@@ -1280,7 +1275,6 @@ void GenerateOopMap::do_exception_edge(BytecodeStream* itr) {
 }
 
 void GenerateOopMap::report_monitor_mismatch(const char *msg) {
-  ResourceMark rm;
   LogStream ls(Log(monitormismatch)::info());
   ls.print("Monitor mismatch in method ");
   method()->print_short_name(&ls);
@@ -2029,7 +2023,7 @@ void GenerateOopMap::ret_jump_targets_do(BytecodeStream *bcs, jmpFct_t jmpFct, i
     int target_bci = rtEnt->jsrs(i);
     // Make sure a jrtRet does not set the changed bit for dead basicblock.
     BasicBlock* jsr_bb    = get_basic_block_containing(target_bci - 1);
-    debug_only(BasicBlock* target_bb = &jsr_bb[1];)
+    DEBUG_ONLY(BasicBlock* target_bb = &jsr_bb[1];)
     assert(target_bb  == get_basic_block_at(target_bci), "wrong calc. of successor basicblock");
     bool alive = jsr_bb->is_alive();
     if (TraceNewOopMapGeneration) {
@@ -2121,8 +2115,6 @@ bool GenerateOopMap::compute_map(Thread* current) {
   // if no code - do nothing
   // compiler needs info
   if (method()->code_size() == 0 || _max_locals + method()->max_stack() == 0) {
-    fill_stackmap_prolog(0);
-    fill_stackmap_epilog();
     return true;
   }
   // Step 1: Compute all jump targets and their return value
@@ -2131,7 +2123,7 @@ bool GenerateOopMap::compute_map(Thread* current) {
 
   // Step 2: Find all basic blocks and count GC points
   if (!_got_error)
-    mark_bbheaders_and_count_gc_points();
+    mark_bbheaders();
 
   // Step 3: Calculate stack maps
   if (!_got_error)
@@ -2152,10 +2144,10 @@ bool GenerateOopMap::compute_map(Thread* current) {
 void GenerateOopMap::error_work(const char *format, va_list ap) {
   _got_error = true;
   char msg_buffer[512];
-  os::vsnprintf(msg_buffer, sizeof(msg_buffer), format, ap);
+  (void) os::vsnprintf(msg_buffer, sizeof(msg_buffer), format, ap);
   // Append method name
   char msg_buffer2[512];
-  os::snprintf(msg_buffer2, sizeof(msg_buffer2), "%s in method %s", msg_buffer, method()->name()->as_C_string());
+  (void) os::snprintf(msg_buffer2, sizeof(msg_buffer2), "%s in method %s", msg_buffer, method()->name()->as_C_string());
   Thread* current = Thread::current();
   if (current->can_call_java()) {
     _exception = Exceptions::new_exception(JavaThread::cast(current),
@@ -2188,9 +2180,6 @@ void GenerateOopMap::report_result() {
   // We now want to report the result of the parse
   _report_result = true;
 
-  // Prolog code
-  fill_stackmap_prolog(_gc_points);
-
    // Mark everything changed, then do one interpretation pass.
   for (int i = 0; i<_bb_count; i++) {
     if (_basic_blocks[i].is_reachable()) {
@@ -2198,14 +2187,6 @@ void GenerateOopMap::report_result() {
       interp_bb(&_basic_blocks[i]);
     }
   }
-
-  // Note: Since we are skipping dead-code when we are reporting results, then
-  // the no. of encountered gc-points might be fewer than the previously number
-  // we have counted. (dead-code is a pain - it should be removed before we get here)
-  fill_stackmap_epilog();
-
-  // Report initvars
-  fill_init_vars(_init_vars);
 
   _report_result = false;
 }

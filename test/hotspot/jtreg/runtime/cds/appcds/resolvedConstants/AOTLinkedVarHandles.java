@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2024, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -56,7 +56,7 @@ public class AOTLinkedVarHandles {
         CDSOptions opts = (new CDSOptions())
             .addPrefix("-XX:ExtraSharedClassListFile=" + classList,
                        "-XX:+AOTClassLinking",
-                       "-Xlog:cds+resolve=trace",
+                       "-Xlog:aot+resolve=trace",
                        "-Xlog:cds+class=debug",
                        "-cp", appJar);
 
@@ -64,6 +64,7 @@ public class AOTLinkedVarHandles {
         OutputAnalyzer dumpOut = CDSTestUtils.createArchiveAndCheck(opts);
         dumpOut.shouldMatch(s + "java/lang/invoke/VarHandle.compareAndExchangeAcquire:\\(\\[DIDI\\)D =>");
         dumpOut.shouldMatch(s + "java/lang/invoke/VarHandle.get:\\(\\[DI\\)D => ");
+        dumpOut.shouldNotContain("rejected .* CP entry.*");
 
         CDSOptions runOpts = (new CDSOptions())
             .setUseVersion(false)

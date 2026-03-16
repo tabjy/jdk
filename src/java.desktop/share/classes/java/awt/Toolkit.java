@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1995, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1995, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -72,8 +72,6 @@ import java.util.stream.Collectors;
 import javax.accessibility.AccessibilityProvider;
 
 import sun.awt.AWTAccessor;
-import sun.awt.AWTPermissions;
-import sun.awt.AppContext;
 import sun.awt.HeadlessToolkit;
 import sun.awt.PeerEvent;
 import sun.awt.PlatformGraphicsInfo;
@@ -1351,27 +1349,16 @@ public abstract class Toolkit {
     }
 
     /**
-     * Get the application's or applet's EventQueue instance.
-     * Depending on the Toolkit implementation, different EventQueues
-     * may be returned for different applets.  Applets should
-     * therefore not assume that the EventQueue instance returned
-     * by this method will be shared by other applets or the system.
-     *
-     * @return    the {@code EventQueue} object
+     * {@return the {@code EventQueue} for this application}
     */
     public final EventQueue getSystemEventQueue() {
-        @SuppressWarnings("removal")
-        SecurityManager security = System.getSecurityManager();
-        if (security != null) {
-            security.checkPermission(AWTPermissions.CHECK_AWT_EVENTQUEUE_PERMISSION);
-        }
         return getSystemEventQueueImpl();
     }
 
     /**
-     * Gets the application's or applet's {@code EventQueue}
-     * instance, without checking access.  For security reasons,
-     * this can only be called from a {@code Toolkit} subclass.
+     * A method used by toolkit subclasses to get the {@code EventQueue}.
+     * This may be more direct or more efficient than calling
+     * {@code getSystemEventQueue()}.
      * @return the {@code EventQueue} object
      */
     protected abstract EventQueue getSystemEventQueueImpl();
@@ -1478,8 +1465,7 @@ public abstract class Toolkit {
         Object oldValue;
 
         synchronized (this) {
-            oldValue = desktopProperties.get(name);
-            desktopProperties.put(name, newValue);
+            oldValue = desktopProperties.put(name, newValue);
         }
 
         // Don't fire change event if old and new values are null.
@@ -1639,7 +1625,7 @@ public abstract class Toolkit {
     private int[] calls = new int[LONG_BITS];
     private static volatile long enabledOnToolkitMask;
     private AWTEventListener eventListener = null;
-    private WeakHashMap<AWTEventListener, SelectiveAWTEventListener> listener2SelectiveListener = new WeakHashMap<>();
+    private final WeakHashMap<AWTEventListener, SelectiveAWTEventListener> listener2SelectiveListener = new WeakHashMap<>();
 
     /*
      * Extracts a "pure" AWTEventListener from a AWTEventListenerProxy,
@@ -1689,11 +1675,6 @@ public abstract class Toolkit {
 
         if (localL == null) {
             return;
-        }
-        @SuppressWarnings("removal")
-        SecurityManager security = System.getSecurityManager();
-        if (security != null) {
-          security.checkPermission(AWTPermissions.ALL_AWT_EVENTS_PERMISSION);
         }
         synchronized (this) {
             SelectiveAWTEventListener selectiveListener =
@@ -1747,21 +1728,15 @@ public abstract class Toolkit {
     public void removeAWTEventListener(AWTEventListener listener) {
         AWTEventListener localL = deProxyAWTEventListener(listener);
 
-        if (listener == null) {
+        if (localL == null) {
             return;
-        }
-        @SuppressWarnings("removal")
-        SecurityManager security = System.getSecurityManager();
-        if (security != null) {
-            security.checkPermission(AWTPermissions.ALL_AWT_EVENTS_PERMISSION);
         }
 
         synchronized (this) {
             SelectiveAWTEventListener selectiveListener =
-                listener2SelectiveListener.get(localL);
+                listener2SelectiveListener.remove(localL);
 
             if (selectiveListener != null) {
-                listener2SelectiveListener.remove(localL);
                 int[] listenerCalls = selectiveListener.getCalls();
                 for (int i=0; i<LONG_BITS; i++) {
                     calls[i] -= listenerCalls[i];
@@ -1807,11 +1782,6 @@ public abstract class Toolkit {
      * @since 1.4
      */
     public AWTEventListener[] getAWTEventListeners() {
-        @SuppressWarnings("removal")
-        SecurityManager security = System.getSecurityManager();
-        if (security != null) {
-            security.checkPermission(AWTPermissions.ALL_AWT_EVENTS_PERMISSION);
-        }
         synchronized (this) {
             EventListener[] la = ToolkitEventMulticaster.getListeners(eventListener,AWTEventListener.class);
 
@@ -1851,11 +1821,6 @@ public abstract class Toolkit {
      * @since 1.4
      */
     public AWTEventListener[] getAWTEventListeners(long eventMask) {
-        @SuppressWarnings("removal")
-        SecurityManager security = System.getSecurityManager();
-        if (security != null) {
-            security.checkPermission(AWTPermissions.ALL_AWT_EVENTS_PERMISSION);
-        }
         synchronized (this) {
             EventListener[] la = ToolkitEventMulticaster.getListeners(eventListener,AWTEventListener.class);
 
@@ -2080,8 +2045,6 @@ public abstract class Toolkit {
     @SuppressWarnings("serial")
     private static class DesktopPropertyChangeSupport extends PropertyChangeSupport {
 
-        private static final StringBuilder PROP_CHANGE_SUPPORT_KEY =
-                new StringBuilder("desktop property change support key");
         private final Object source;
 
         public DesktopPropertyChangeSupport(Object sourceBean) {
@@ -2089,16 +2052,14 @@ public abstract class Toolkit {
             source = sourceBean;
         }
 
+        private static PropertyChangeSupport pcs;
         @Override
         public synchronized void addPropertyChangeListener(
                 String propertyName,
                 PropertyChangeListener listener)
         {
-            PropertyChangeSupport pcs = (PropertyChangeSupport)
-                    AppContext.getAppContext().get(PROP_CHANGE_SUPPORT_KEY);
             if (null == pcs) {
                 pcs = new PropertyChangeSupport(source);
-                AppContext.getAppContext().put(PROP_CHANGE_SUPPORT_KEY, pcs);
             }
             pcs.addPropertyChangeListener(propertyName, listener);
         }
@@ -2108,8 +2069,6 @@ public abstract class Toolkit {
                 String propertyName,
                 PropertyChangeListener listener)
         {
-            PropertyChangeSupport pcs = (PropertyChangeSupport)
-                    AppContext.getAppContext().get(PROP_CHANGE_SUPPORT_KEY);
             if (null != pcs) {
                 pcs.removePropertyChangeListener(propertyName, listener);
             }
@@ -2118,8 +2077,6 @@ public abstract class Toolkit {
         @Override
         public synchronized PropertyChangeListener[] getPropertyChangeListeners()
         {
-            PropertyChangeSupport pcs = (PropertyChangeSupport)
-                    AppContext.getAppContext().get(PROP_CHANGE_SUPPORT_KEY);
             if (null != pcs) {
                 return pcs.getPropertyChangeListeners();
             } else {
@@ -2130,8 +2087,6 @@ public abstract class Toolkit {
         @Override
         public synchronized PropertyChangeListener[] getPropertyChangeListeners(String propertyName)
         {
-            PropertyChangeSupport pcs = (PropertyChangeSupport)
-                    AppContext.getAppContext().get(PROP_CHANGE_SUPPORT_KEY);
             if (null != pcs) {
                 return pcs.getPropertyChangeListeners(propertyName);
             } else {
@@ -2141,19 +2096,14 @@ public abstract class Toolkit {
 
         @Override
         public synchronized void addPropertyChangeListener(PropertyChangeListener listener) {
-            PropertyChangeSupport pcs = (PropertyChangeSupport)
-                    AppContext.getAppContext().get(PROP_CHANGE_SUPPORT_KEY);
             if (null == pcs) {
                 pcs = new PropertyChangeSupport(source);
-                AppContext.getAppContext().put(PROP_CHANGE_SUPPORT_KEY, pcs);
             }
             pcs.addPropertyChangeListener(listener);
         }
 
         @Override
         public synchronized void removePropertyChangeListener(PropertyChangeListener listener) {
-            PropertyChangeSupport pcs = (PropertyChangeSupport)
-                    AppContext.getAppContext().get(PROP_CHANGE_SUPPORT_KEY);
             if (null != pcs) {
                 pcs.removePropertyChangeListener(listener);
             }
@@ -2165,33 +2115,16 @@ public abstract class Toolkit {
          */
         @Override
         public void firePropertyChange(final PropertyChangeEvent evt) {
+            if (pcs == null) {
+                return;
+            }
             Object oldValue = evt.getOldValue();
             Object newValue = evt.getNewValue();
             String propertyName = evt.getPropertyName();
             if (oldValue != null && newValue != null && oldValue.equals(newValue)) {
                 return;
             }
-            Runnable updater = new Runnable() {
-                public void run() {
-                    PropertyChangeSupport pcs = (PropertyChangeSupport)
-                            AppContext.getAppContext().get(PROP_CHANGE_SUPPORT_KEY);
-                    if (null != pcs) {
-                        pcs.firePropertyChange(evt);
-                    }
-                }
-            };
-            final AppContext currentAppContext = AppContext.getAppContext();
-            for (AppContext appContext : AppContext.getAppContexts()) {
-                if (null == appContext || appContext.isDisposed()) {
-                    continue;
-                }
-                if (currentAppContext == appContext) {
-                    updater.run();
-                } else {
-                    final PeerEvent e = new PeerEvent(source, updater, PeerEvent.ULTIMATE_PRIORITY_EVENT);
-                    SunToolkit.postEvent(appContext, e);
-                }
-            }
+            pcs.firePropertyChange(evt);
         }
     }
 

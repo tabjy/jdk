@@ -24,7 +24,6 @@
 #ifndef SHARE_GC_SHENANDOAH_SHENANDOAHCLOSURES_HPP
 #define SHARE_GC_SHENANDOAH_SHENANDOAHCLOSURES_HPP
 
-#include "code/nmethod.hpp"
 #include "gc/shared/stringdedup/stringDedup.hpp"
 #include "gc/shenandoah/shenandoahGenerationType.hpp"
 #include "gc/shenandoah/shenandoahTaskqueue.hpp"
@@ -36,6 +35,7 @@ class ShenandoahBarrierSet;
 class ShenandoahHeap;
 class ShenandoahMarkingContext;
 class ShenandoahReferenceProcessor;
+class SATBMarkQueueSet;
 
 //
 // ========= Super
@@ -55,9 +55,18 @@ public:
 // ========= Marking
 //
 
+class ShenandoahFlushSATBHandshakeClosure : public HandshakeClosure {
+private:
+  SATBMarkQueueSet& _qset;
+public:
+  inline explicit ShenandoahFlushSATBHandshakeClosure(SATBMarkQueueSet& qset);
+  inline void do_thread(Thread* thread) override;
+};
+
 class ShenandoahMarkRefsSuperClosure : public ShenandoahSuperClosure {
 private:
   ShenandoahObjToScanQueue* _queue;
+  ShenandoahObjToScanQueue* _old_queue;
   ShenandoahMarkingContext* const _mark_context;
   bool _weak;
 
@@ -66,7 +75,7 @@ protected:
   void work(T *p);
 
 public:
-  inline ShenandoahMarkRefsSuperClosure(ShenandoahObjToScanQueue* q, ShenandoahReferenceProcessor* rp);
+  inline ShenandoahMarkRefsSuperClosure(ShenandoahObjToScanQueue* q, ShenandoahReferenceProcessor* rp, ShenandoahObjToScanQueue* old_q);
 
   bool is_weak() const {
     return _weak;
@@ -89,8 +98,8 @@ private:
   inline void do_oop_work(T* p)     { work<T, GENERATION>(p); }
 
 public:
-  ShenandoahMarkRefsClosure(ShenandoahObjToScanQueue* q, ShenandoahReferenceProcessor* rp) :
-          ShenandoahMarkRefsSuperClosure(q, rp) {};
+  ShenandoahMarkRefsClosure(ShenandoahObjToScanQueue* q, ShenandoahReferenceProcessor* rp, ShenandoahObjToScanQueue* old_q) :
+          ShenandoahMarkRefsSuperClosure(q, rp, old_q) {};
 
   virtual void do_oop(narrowOop* p) { do_oop_work(p); }
   virtual void do_oop(oop* p)       { do_oop_work(p); }
@@ -191,7 +200,7 @@ private:
   inline void work(T* p);
 
 public:
-  ShenandoahMarkUpdateRefsClosure(ShenandoahObjToScanQueue* q, ShenandoahReferenceProcessor* rp);
+  ShenandoahMarkUpdateRefsClosure(ShenandoahObjToScanQueue* q, ShenandoahReferenceProcessor* rp, ShenandoahObjToScanQueue* old_q);
 
   virtual void do_oop(narrowOop* p) { work(p); }
   virtual void do_oop(oop* p)       { work(p); }
@@ -217,6 +226,17 @@ private:
 public:
   virtual void do_oop(narrowOop* p) { work(p); }
   virtual void do_oop(oop* p)       { work(p); }
+};
+
+
+class ShenandoahFlushSATB : public ThreadClosure {
+private:
+  SATBMarkQueueSet& _satb_qset;
+
+public:
+  explicit ShenandoahFlushSATB(SATBMarkQueueSet& satb_qset) : _satb_qset(satb_qset) {}
+
+  inline void do_thread(Thread* thread) override;
 };
 
 

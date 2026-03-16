@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,19 +26,15 @@
 package java.lang.foreign;
 
 import jdk.internal.foreign.abi.AbstractLinker;
-import jdk.internal.foreign.abi.LinkerOptions;
 import jdk.internal.foreign.abi.CapturableState;
+import jdk.internal.foreign.abi.LinkerOptions;
 import jdk.internal.foreign.abi.SharedUtils;
 import jdk.internal.javac.Restricted;
 import jdk.internal.reflect.CallerSensitive;
 
 import java.lang.invoke.MethodHandle;
 import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
 import java.util.function.Consumer;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 /**
  * A linker provides access to foreign functions from Java code, and access to Java code
@@ -797,7 +793,7 @@ public sealed interface Linker permits AbstractLinker {
          *     arguments</li>
          * <li>{@code N}, none of the arguments passed to the function are passed as
          *     variadic arguments</li>
-         * <li>{@code n}, where {@code 0 < m < N}, the arguments {@code m..N} are passed
+         * <li>{@code m}, where {@code 0 < m < N}, the arguments {@code m..N-1} are passed
          *     as variadic arguments</li>
          * </ul>
          * It is important to always use this linker option when linking a
@@ -817,25 +813,28 @@ public sealed interface Linker permits AbstractLinker {
         }
 
         /**
-         * {@return a linker option used to save portions of the execution state
-         *          immediately after calling a foreign function associated with a
-         *          downcall method handle, before it can be overwritten by the Java
-         *          runtime, or read through conventional means}
+         * {@return a linker option used to initialize portions of the execution
+         *          state immediately before, and save portions of the execution
+         *          state immediately after calling a foreign function associated
+         *          with a downcall method handle, before it can be overwritten by the
+         *          Java runtime, or read through conventional means}
          * <p>
-         * Execution state is captured by a downcall method handle on invocation, by
-         * writing it to a native segment provided by the user to the downcall method
-         * handle. For this purpose, a downcall method handle linked with this option
-         * will feature an additional {@link MemorySegment} parameter directly following
-         * the target address, and optional {@link SegmentAllocator} parameters. This
-         * parameter, the <em>capture state segment</em>, represents the native segment
-         * into which the captured state is written.
+         * Execution state is initialized from, or saved to a native segment provided by
+         * the user to the downcall method handle. For this purpose, a downcall method
+         * handle linked with this option will feature an additional {@link MemorySegment}
+         * parameter directly following the target address, and optional {@link SegmentAllocator}
+         * parameters. This parameter, the <em>capture state segment</em>, represents the
+         * native segment from which the capture state is initialized, and into which the
+         * capture state is saved.
          * <p>
          * The capture state segment must have size and alignment compatible with the
          * layout returned by {@linkplain #captureStateLayout}. This layout is a struct
          * layout which has a named field for each captured value.
          * <p>
-         * Captured state can be retrieved from the capture state segment by constructing
-         * var handles from the {@linkplain #captureStateLayout capture state layout}.
+         * Captured state can be stored in, or retrieved from the capture state segment by
+         * constructing var handles from the {@linkplain #captureStateLayout capture state layout}.
+         * Some functions require this state the be initialized to a particular value before
+         * invoking the downcall.
          * <p>
          * The following example demonstrates the use of this linker option:
          * {@snippet lang = "java":
@@ -847,13 +846,12 @@ public sealed interface Linker permits AbstractLinker {
          * VarHandle errnoHandle = capturedStateLayout.varHandle(PathElement.groupElement("errno"));
          * try (Arena arena = Arena.ofConfined()) {
          *     MemorySegment capturedState = arena.allocate(capturedStateLayout);
+         *     errnoHandle.set(capturedState, 0L, 0); // set errno to 0
          *     handle.invoke(capturedState);
          *     int errno = (int) errnoHandle.get(capturedState, 0L);
          *     // use errno
          * }
          * }
-         * <p>
-         * This linker option can not be combined with {@link #critical}.
          *
          * @param capturedState the names of the values to save
          * @throws IllegalArgumentException if at least one of the provided
@@ -861,11 +859,11 @@ public sealed interface Linker permits AbstractLinker {
          * @see #captureStateLayout()
          */
         static Option captureCallState(String... capturedState) {
-            Set<CapturableState> set = Stream.of(Objects.requireNonNull(capturedState))
-                    .map(Objects::requireNonNull)
-                    .map(CapturableState::forName)
-                    .collect(Collectors.toSet());
-            return new LinkerOptions.CaptureCallState(set);
+            int mask = 0;
+            for (var state : capturedState) {
+                mask |= CapturableState.maskFromName(state);
+            }
+            return new LinkerOptions.CaptureCallState(mask);
         }
 
          /**

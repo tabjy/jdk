@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -267,8 +267,7 @@ public abstract class SunToolkit extends Toolkit
 
     /*
      * Create a new AppContext, along with its EventQueue, for a
-     * new ThreadGroup.  Browser code, for example, would use this
-     * method to create an AppContext & EventQueue for an Applet.
+     * new ThreadGroup.
      */
     public static AppContext createNewAppContext() {
         ThreadGroup threadGroup = Thread.currentThread().getThreadGroup();
@@ -334,9 +333,6 @@ public abstract class SunToolkit extends Toolkit
         if (target instanceof Component) {
             AWTAccessor.getComponentAccessor().
                 setAppContext((Component)target, context);
-        } else if (target instanceof MenuComponent) {
-            AWTAccessor.getMenuComponentAccessor().
-                setAppContext((MenuComponent)target, context);
         } else {
             return false;
         }
@@ -352,8 +348,7 @@ public abstract class SunToolkit extends Toolkit
             return AWTAccessor.getComponentAccessor().
                        getAppContext((Component)target);
         } else if (target instanceof MenuComponent) {
-            return AWTAccessor.getMenuComponentAccessor().
-                       getAppContext((MenuComponent)target);
+            return AppContext.getAppContext();
         } else {
             return null;
         }
@@ -415,6 +410,11 @@ public abstract class SunToolkit extends Toolkit
         cont.setFocusTraversalPolicy(defaultPolicy);
     }
 
+    /* This method should be removed at the same time as targetToAppContext() */
+    public static void insertTargetMapping(Object target) {
+        insertTargetMapping(target, AppContext.getAppContext());
+    }
+
     /*
      * Insert a mapping from target to AppContext, for later retrieval
      * via targetToAppContext() above.
@@ -425,6 +425,17 @@ public abstract class SunToolkit extends Toolkit
             // instead.
             appContextMap.put(target, appContext);
         }
+    }
+
+    public static void postEvent(AWTEvent event) {
+       /* Adding AppContext is temporary to help migrate away from using app contexts
+        * It is used by code which has already been subject to that migration.
+        * However until that is complete, there is a single main app context we
+        * can retrieve to use which would be the same as if the code had
+        * not been migrated.
+        * The overload which accepts the AppContext will eventually be replaced by this.
+        */
+        postEvent(AppContext.getAppContext(), event);
     }
 
     /*
@@ -538,6 +549,10 @@ public abstract class SunToolkit extends Toolkit
     public static void executeOnEventHandlerThread(PeerEvent peerEvent) {
         postEvent(targetToAppContext(peerEvent.getSource()), peerEvent);
     }
+
+     public static void invokeLater(Runnable dispatcher) {
+         invokeLaterOnAppContext(AppContext.getAppContext(), dispatcher);
+     }
 
     /*
      * Execute a chunk of code on the Java event handler thread. The
@@ -701,7 +716,6 @@ public abstract class SunToolkit extends Toolkit
 
     static Image getImageFromHash(Toolkit tk,
                                                String filename) {
-        checkPermissions(filename);
         synchronized (fileImgCache) {
             Image img = (Image)fileImgCache.get(filename);
             if (img == null) {
@@ -757,7 +771,6 @@ public abstract class SunToolkit extends Toolkit
 
     @Override
     public Image createImage(String filename) {
-        checkPermissions(filename);
         return createImage(new FileImageSource(filename));
     }
 
@@ -870,7 +883,6 @@ public abstract class SunToolkit extends Toolkit
 
     protected static boolean imageExists(String filename) {
         if (filename != null) {
-            checkPermissions(filename);
             return new File(filename).exists();
         }
         return false;
@@ -886,14 +898,6 @@ public abstract class SunToolkit extends Toolkit
             }
         }
         return false;
-    }
-
-    private static void checkPermissions(String filename) {
-        @SuppressWarnings("removal")
-        SecurityManager security = System.getSecurityManager();
-        if (security != null) {
-            security.checkRead(filename);
-        }
     }
 
     /**
@@ -1030,8 +1034,7 @@ public abstract class SunToolkit extends Toolkit
         return getSystemEventQueueImplPP();
     }
 
-    // Package private implementation
-    static EventQueue getSystemEventQueueImplPP() {
+    public static EventQueue getSystemEventQueueImplPP() {
         return getSystemEventQueueImplPP(AppContext.getAppContext());
     }
 
@@ -1082,22 +1085,9 @@ public abstract class SunToolkit extends Toolkit
 
     /**
      * Returns whether popup is allowed to be shown above the task bar.
-     * This is a default implementation of this method, which checks
-     * corresponding security permission.
      */
     public boolean canPopupOverlapTaskBar() {
-        boolean result = true;
-        try {
-            @SuppressWarnings("removal")
-            SecurityManager sm = System.getSecurityManager();
-            if (sm != null) {
-                sm.checkPermission(AWTPermissions.SET_WINDOW_ALWAYS_ON_TOP_PERMISSION);
-            }
-        } catch (SecurityException se) {
-            // There is no permission to show popups over the task bar
-            result = false;
-        }
-        return result;
+        return true;
     }
 
     /**
@@ -1659,9 +1649,6 @@ public abstract class SunToolkit extends Toolkit
      * But GTK currently has an additional test based on locale which is
      * not applied by Metal. So mixing GTK in a few locales with Metal
      * would mean the last one wins.
-     * This could be stored per-app context which would work
-     * for different applets, but wouldn't help for a single application
-     * using GTK and some other L&F concurrently.
      * But it is expected this will be addressed within GTK and the font
      * system so is a temporary and somewhat unlikely harmless corner case.
      */

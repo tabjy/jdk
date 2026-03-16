@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -21,13 +21,15 @@
  * questions.
  */
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import jdk.jpackage.test.PackageTest;
-import jdk.jpackage.test.JPackageCommand;
-import jdk.jpackage.test.Annotations.Test;
-import jdk.jpackage.test.Annotations.Parameters;
 import java.util.List;
+import jdk.jpackage.internal.util.Slot;
+import jdk.jpackage.test.Annotations.Parameters;
+import jdk.jpackage.test.Annotations.Test;
+import jdk.jpackage.test.JPackageCommand;
+import jdk.jpackage.test.PackageTest;
 import jdk.jpackage.test.PackageType;
 import jdk.jpackage.test.TKit;
 
@@ -108,11 +110,7 @@ public class WinInstallerUiTest {
         }
 
         if (withLicense) {
-            test.addInitializer(cmd -> {
-                cmd.addArguments("--license-file", TKit.createRelativePathCopy(
-                        TKit.TEST_SRC_ROOT.resolve(Path.of("resources",
-                                "license.txt"))));
-            });
+            setLicenseFile(test);
         }
 
         test.run();
@@ -122,18 +120,32 @@ public class WinInstallerUiTest {
         StringBuilder sb = new StringBuilder(cmd.name());
         sb.append("With");
         if (withDirChooser) {
-            sb.append("DirChooser");
+            sb.append("Dc"); // DirChooser
         }
         if (withShortcutPrompt) {
-            sb.append("ShortcutPrompt");
+            sb.append("Sp"); // ShortcutPrompt
         }
         if (withLicense) {
-            sb.append("License");
+            sb.append("L"); // License
         }
         cmd.setArgumentValue("--name", sb.toString());
+    }
+
+    private static void setLicenseFile(PackageTest test) {
+        var inputLicenseFile = Slot.<Path>createEmpty();
+
+        test.addRunOnceInitializer(() -> {
+            var dir = TKit.createTempDirectory("license-dir");
+            inputLicenseFile.set(dir.resolve(LICENSE_FILE.getFileName()));
+            Files.copy(LICENSE_FILE, inputLicenseFile.get());
+        }).addInitializer(cmd -> {
+            cmd.setArgumentValue("--license-file", inputLicenseFile.get());
+        });
     }
 
     private final boolean withDirChooser;
     private final boolean withLicense;
     private final boolean withShortcutPrompt;
+
+    private static final Path LICENSE_FILE = TKit.TEST_SRC_ROOT.resolve(Path.of("resources", "license.txt"));
 }

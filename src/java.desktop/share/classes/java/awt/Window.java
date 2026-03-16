@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1995, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1995, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -64,7 +64,6 @@ import javax.accessibility.AccessibleState;
 import javax.accessibility.AccessibleStateSet;
 
 import sun.awt.AWTAccessor;
-import sun.awt.AWTPermissions;
 import sun.awt.AppContext;
 import sun.awt.DebugSettings;
 import sun.awt.SunToolkit;
@@ -230,7 +229,7 @@ public class Window extends Container implements Accessible {
     static boolean systemSyncLWRequests = false;
 
     /**
-     * Focus transfers should be synchronous for lightweight component requests.
+     * @serial Focus transfers should be synchronous for lightweight component requests.
      */
     boolean syncLWRequests = false;
     transient boolean beforeFirstShow = true;
@@ -599,10 +598,7 @@ public class Window extends Container implements Accessible {
         if (owner != null) {
             owner.addOwnedWindow(weakThis);
             if (owner.isAlwaysOnTop()) {
-                try {
-                    setAlwaysOnTop(true);
-                } catch (SecurityException ignore) {
-                }
+                setAlwaysOnTop(true);
             }
         }
 
@@ -1306,10 +1302,7 @@ public class Window extends Container implements Accessible {
     // to insure that it cannot be overridden by client subclasses.
     final void toBack_NoClientCode() {
         if(isAlwaysOnTop()) {
-            try {
-                setAlwaysOnTop(false);
-            }catch(SecurityException e) {
-            }
+            setAlwaysOnTop(false);
         }
         if (visible) {
             WindowPeer peer = (WindowPeer)this.peer;
@@ -1527,8 +1520,6 @@ public class Window extends Container implements Accessible {
     /**
      * Returns an array of all {@code Window}s, both owned and ownerless,
      * created by this application.
-     * If called from an applet, the array includes only the {@code Window}s
-     * accessible by that applet.
      * <p>
      * <b>Warning:</b> this method may return system created windows, such
      * as a print dialog. Applications should not assume the existence of
@@ -1550,8 +1541,6 @@ public class Window extends Container implements Accessible {
      * Returns an array of all {@code Window}s created by this application
      * that have no owner. They include {@code Frame}s and ownerless
      * {@code Dialog}s and {@code Window}s.
-     * If called from an applet, the array includes only the {@code Window}s
-     * accessible by that applet.
      * <p>
      * <b>Warning:</b> this method may return system created windows, such
      * as a print dialog. Applications should not assume the existence of
@@ -1626,13 +1615,6 @@ public class Window extends Container implements Accessible {
         }
         if (modalExclusionType == exclusionType) {
             return;
-        }
-        if (exclusionType == Dialog.ModalExclusionType.TOOLKIT_EXCLUDE) {
-            @SuppressWarnings("removal")
-            SecurityManager sm = System.getSecurityManager();
-            if (sm != null) {
-                sm.checkPermission(AWTPermissions.TOOLKIT_MODALITY_PERMISSION);
-            }
         }
         modalExclusionType = exclusionType;
 
@@ -2169,12 +2151,6 @@ public class Window extends Container implements Accessible {
      * @since 1.5
      */
     public final void setAlwaysOnTop(boolean alwaysOnTop) {
-        @SuppressWarnings("removal")
-        SecurityManager security = System.getSecurityManager();
-        if (security != null) {
-            security.checkPermission(AWTPermissions.SET_WINDOW_ALWAYS_ON_TOP_PERMISSION);
-        }
-
         boolean oldAlwaysOnTop;
         synchronized(this) {
             oldAlwaysOnTop = this.alwaysOnTop;
@@ -2205,10 +2181,7 @@ public class Window extends Container implements Accessible {
         for (WeakReference<Window> ref : ownedWindowArray) {
             Window window = ref.get();
             if (window != null) {
-                try {
-                    window.setAlwaysOnTop(alwaysOnTop);
-                } catch (SecurityException ignore) {
-                }
+                window.setAlwaysOnTop(alwaysOnTop);
             }
         }
     }
@@ -2800,7 +2773,7 @@ public class Window extends Container implements Accessible {
     }
 
     /**
-     * Window type.
+     * @serial Window type.
      *
      * Synchronization: ObjectLock
      */
@@ -3046,7 +3019,7 @@ public class Window extends Container implements Accessible {
          setModalExclusionType(et); // since 6.0
          boolean aot = f.get("alwaysOnTop", false);
          if(aot) {
-             setAlwaysOnTop(aot); // since 1.5; subject to permission check
+             setAlwaysOnTop(aot);
          }
          shape = (Shape)f.get("shape", null);
          opacity = (Float)f.get("opacity", 1.0f);
@@ -3360,7 +3333,7 @@ public class Window extends Container implements Accessible {
     }
 
     /**
-     * {@code true} if this Window should appear at the default location,
+     * @serial {@code true} if this Window should appear at the default location,
      * {@code false} if at the current location.
      */
     private volatile boolean locationByPlatform = locationByPlatformProp;
@@ -3888,7 +3861,7 @@ public class Window extends Container implements Accessible {
             if (content != null) {
                 content.setOpaque(isOpaque);
 
-                // Iterate down one level to see whether we have a JApplet
+                // Iterate down one level to see whether we have (eg) a JInternalFrame
                 // (which is also a RootPaneContainer) which requires processing
                 int numChildren = content.getComponentCount();
                 if (numChildren > 0) {

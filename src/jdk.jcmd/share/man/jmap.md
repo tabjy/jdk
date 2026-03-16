@@ -1,5 +1,5 @@
 ---
-# Copyright (c) 2004, 2018, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2004, 2024, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # This code is free software; you can redistribute it and/or modify it
@@ -62,20 +62,20 @@ was produced.
 
 ## Options for the jmap Command
 
-`-clstats` *pid*
+[`-clstats`]{#option-clstats} *pid*
 :   Connects to a running process and prints class loader statistics of Java
     heap.
 
-`-finalizerinfo` *pid*
+[`-finalizerinfo`]{#option-finalizerinfo} *pid*
 :   Connects to a running process and prints information on objects awaiting
     finalization.
 
-`-histo`\[`:live`\] *pid*
+[`-histo`]{#option-histo}\[`:live`\] *pid*
 :   Connects to a running process and prints a histogram of the Java object
     heap. If the `live` suboption is specified, it then counts only live
     objects.
 
-`-dump:`*dump\_options* *pid*
+[`-dump:`]{#option-dump_}*dump\_options* *pid*
 :   Connects to a running process and dumps the Java heap. The *dump\_options*
     include:
 

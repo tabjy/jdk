@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2026, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2014, 2020, Red Hat Inc. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -23,7 +23,6 @@
  *
  */
 
-#include "precompiled.hpp"
 #include "asm/macroAssembler.hpp"
 #include "code/codeCache.hpp"
 #include "code/compiledIC.hpp"
@@ -134,7 +133,6 @@ void NativeMovConstReg::verify() {
 
 
 intptr_t NativeMovConstReg::data() const {
-  // das(uint64_t(instruction_address()),2);
   address addr = MacroAssembler::target_addr_for_insn(instruction_address());
   if (maybe_cpool_ref(instruction_address())) {
     return *(intptr_t*)addr;
@@ -145,6 +143,7 @@ intptr_t NativeMovConstReg::data() const {
 
 void NativeMovConstReg::set_data(intptr_t x) {
   if (maybe_cpool_ref(instruction_address())) {
+    MACOS_AARCH64_ONLY(os::thread_wx_enable_write());
     address addr = MacroAssembler::target_addr_for_insn(instruction_address());
     *(intptr_t*)addr = x;
   } else {
@@ -193,7 +192,6 @@ int NativeMovRegMem::offset() const  {
 
 void NativeMovRegMem::set_offset(int x) {
   address pc = instruction_address();
-  unsigned insn = *(unsigned*)pc;
   if (maybe_cpool_ref(pc)) {
     address addr = MacroAssembler::target_addr_for_insn(pc);
     *(int64_t*)addr = x;
@@ -205,7 +203,7 @@ void NativeMovRegMem::set_offset(int x) {
 
 void NativeMovRegMem::verify() {
 #ifdef ASSERT
-  address dest = MacroAssembler::target_addr_for_insn_or_null(instruction_address());
+  MacroAssembler::target_addr_for_insn(instruction_address());
 #endif
 }
 
@@ -213,13 +211,8 @@ void NativeMovRegMem::verify() {
 
 void NativeJump::verify() { ; }
 
-
-void NativeJump::check_verified_entry_alignment(address entry, address verified_entry) {
-}
-
-
 address NativeJump::jump_destination() const          {
-  address dest = MacroAssembler::target_addr_for_insn_or_null(instruction_address());
+  address dest = MacroAssembler::target_addr_for_insn(instruction_address());
 
   // We use jump to self as the unresolved address which the inline
   // cache code (and relocs) know about
@@ -346,10 +339,6 @@ bool NativeInstruction::is_movk() {
   return Instruction_aarch64::extract(int_at(0), 30, 23) == 0b11100101;
 }
 
-bool NativeInstruction::is_sigill_not_entrant() {
-  return uint_at(0) == 0xd4bbd5a1; // dcps1 #0xdead
-}
-
 void NativeIllegalInstruction::insert(address code_pos) {
   *(juint*)code_pos = 0xd4bbd5a1; // dcps1 #0xdead
 }
@@ -359,45 +348,6 @@ bool NativeInstruction::is_stop() {
 }
 
 //-------------------------------------------------------------------
-
-// MT-safe inserting of a jump over a jump or a nop (used by
-// nmethod::make_not_entrant)
-
-void NativeJump::patch_verified_entry(address entry, address verified_entry, address dest) {
-
-  assert(dest == SharedRuntime::get_handle_wrong_method_stub(), "expected fixed destination of patch");
-  assert(nativeInstruction_at(verified_entry)->is_jump_or_nop()
-         || nativeInstruction_at(verified_entry)->is_sigill_not_entrant(),
-         "Aarch64 cannot replace non-jump with jump");
-
-  // Patch this nmethod atomically.
-  if (Assembler::reachable_from_branch_at(verified_entry, dest)) {
-    ptrdiff_t disp = dest - verified_entry;
-    guarantee(disp < 1 << 27 && disp > - (1 << 27), "branch overflow");
-
-    unsigned int insn = (0b000101 << 26) | ((disp >> 2) & 0x3ffffff);
-    *(unsigned int*)verified_entry = insn;
-  } else {
-    // We use an illegal instruction for marking a method as not_entrant.
-    NativeIllegalInstruction::insert(verified_entry);
-  }
-
-  ICache::invalidate_range(verified_entry, instruction_size);
-}
-
-void NativeGeneralJump::verify() {  }
-
-void NativeGeneralJump::insert_unconditional(address code_pos, address entry) {
-  NativeGeneralJump* n_jump = (NativeGeneralJump*)code_pos;
-
-  CodeBuffer cb(code_pos, instruction_size);
-  MacroAssembler a(&cb);
-
-  a.movptr(rscratch1, (uintptr_t)entry);
-  a.br(rscratch1);
-
-  ICache::invalidate_range(code_pos, instruction_size);
-}
 
 // MT-safe patching of a long jump instruction.
 void NativeGeneralJump::replace_mt_safe(address instr_addr, address code_buffer) {
@@ -440,12 +390,6 @@ void NativeCall::trampoline_jump(CodeBuffer &cbuf, address dest, JVMCI_TRAPS) {
 void NativePostCallNop::make_deopt() {
   NativeDeoptInstruction::insert(addr_at(0));
 }
-
-#ifdef ASSERT
-static bool is_movk_to_zr(uint32_t insn) {
-  return ((insn & 0xffe0001f) == 0xf280001f);
-}
-#endif
 
 bool NativePostCallNop::patch(int32_t oopmap_slot, int32_t cb_offset) {
   if (((oopmap_slot & 0xff) != oopmap_slot) || ((cb_offset & 0xffffff) != cb_offset)) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2024, 2025, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2019, 2022, Red Hat, Inc. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -23,7 +23,6 @@
  *
  */
 
-#include "precompiled.hpp"
 
 #include "gc/shenandoah/shenandoahClosures.inline.hpp"
 #include "gc/shenandoah/shenandoahHeap.inline.hpp"
@@ -125,13 +124,13 @@ void ShenandoahNMethod::heal_nmethod(nmethod* nm) {
   assert(data->lock()->owned_by_self(), "Must hold the lock");
 
   ShenandoahHeap* const heap = ShenandoahHeap::heap();
-  if (heap->is_concurrent_mark_in_progress()) {
-    ShenandoahKeepAliveClosure cl;
-    data->oops_do(&cl);
-  } else if (heap->is_concurrent_weak_root_in_progress() ||
-             heap->is_concurrent_strong_root_in_progress() ) {
+  if (heap->is_concurrent_weak_root_in_progress() ||
+      heap->is_concurrent_strong_root_in_progress()) {
     ShenandoahEvacOOMScope evac_scope;
     heal_nmethod_metadata(data);
+  } else if (heap->is_concurrent_mark_in_progress()) {
+    ShenandoahKeepAliveClosure cl;
+    data->oops_do(&cl);
   } else {
     // There is possibility that GC is cancelled when it arrives final mark.
     // In this case, concurrent root phase is skipped and degenerated GC should be
@@ -179,9 +178,9 @@ public:
   }
 };
 
-void ShenandoahNMethod::assert_same_oops(bool allow_dead) {
+void ShenandoahNMethod::assert_same_oops() {
   ShenandoahNMethodOopDetector detector;
-  nm()->oops_do(&detector, allow_dead);
+  nm()->oops_do(&detector);
 
   GrowableArray<oop*>* oops = detector.oops();
 
@@ -242,7 +241,7 @@ void ShenandoahNMethodTable::register_nmethod(nmethod* nm) {
     assert(nm == data->nm(), "Must be same nmethod");
     // Prevent updating a nmethod while concurrent iteration is in progress.
     wait_until_concurrent_iteration_done();
-    ShenandoahReentrantLocker data_locker(data->lock());
+    ShenandoahNMethodLocker data_locker(data->lock());
     data->update();
   } else {
     // For a new nmethod, we can safely append it to the list, because
@@ -434,8 +433,8 @@ void ShenandoahNMethodTableSnapshot::parallel_nmethods_do(NMethodClosure *f) {
   ShenandoahNMethod** const list = _list->list();
 
   size_t max = (size_t)_limit;
-  while (_claimed < max) {
-    size_t cur = Atomic::fetch_then_add(&_claimed, stride, memory_order_relaxed);
+  while (_claimed.load_relaxed() < max) {
+    size_t cur = _claimed.fetch_then_add(stride, memory_order_relaxed);
     size_t start = cur;
     size_t end = MIN2(cur + stride, max);
     if (start >= max) break;
@@ -458,8 +457,8 @@ void ShenandoahNMethodTableSnapshot::concurrent_nmethods_do(NMethodClosure* cl) 
 
   ShenandoahNMethod** list = _list->list();
   size_t max = (size_t)_limit;
-  while (_claimed < max) {
-    size_t cur = Atomic::fetch_then_add(&_claimed, stride, memory_order_relaxed);
+  while (_claimed.load_relaxed() < max) {
+    size_t cur = _claimed.fetch_then_add(stride, memory_order_relaxed);
     size_t start = cur;
     size_t end = MIN2(cur + stride, max);
     if (start >= max) break;

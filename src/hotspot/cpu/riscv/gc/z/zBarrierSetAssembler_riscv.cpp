@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2020, 2023, Huawei Technologies Co., Ltd. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -23,7 +23,6 @@
  *
  */
 
-#include "precompiled.hpp"
 #include "asm/macroAssembler.inline.hpp"
 #include "code/codeBlob.hpp"
 #include "code/vmreg.inline.hpp"
@@ -241,7 +240,7 @@ static void store_barrier_buffer_add(MacroAssembler* masm,
   __ beqz(tmp2, slow_path);
 
   // Bump the pointer
-  __ sub(tmp2, tmp2, sizeof(ZStoreBarrierEntry));
+  __ subi(tmp2, tmp2, sizeof(ZStoreBarrierEntry));
   __ sd(tmp2, Address(tmp1, ZStoreBarrierBuffer::current_offset()));
 
   // Compute the buffer entry address
@@ -286,7 +285,7 @@ void ZBarrierSetAssembler::store_barrier_medium(MacroAssembler* masm,
     __ relocate(barrier_Relocation::spec(), [&] {
       __ li16u(rtmp1, barrier_Relocation::unpatched);
     }, ZBarrierRelocationFormatStoreGoodBits);
-    __ cmpxchg_weak(rtmp2, zr, rtmp1,
+    __ weak_cmpxchg(rtmp2, zr, rtmp1,
                     Assembler::int64,
                     Assembler::relaxed /* acquire */, Assembler::relaxed /* release */,
                     rtmp3);
@@ -603,6 +602,27 @@ void ZBarrierSetAssembler::try_resolve_jobject_in_native(MacroAssembler* masm,
   BLOCK_COMMENT("} ZBarrierSetAssembler::try_resolve_jobject_in_native");
 }
 
+#ifdef COMPILER2
+void ZBarrierSetAssembler::try_resolve_weak_handle_in_c2(MacroAssembler* masm, Register obj, Register tmp, Label& slow_path) {
+  BLOCK_COMMENT("ZBarrierSetAssembler::try_resolve_weak_handle_in_c2 {");
+
+  // Resolve weak handle using the standard implementation.
+  BarrierSetAssembler::try_resolve_weak_handle_in_c2(masm, obj, tmp, slow_path);
+
+  // Check if the oop is bad, in which case we need to take the slow path.
+  __ relocate(barrier_Relocation::spec(), [&] {
+    __ li16u(tmp, barrier_Relocation::unpatched);
+  }, ZBarrierRelocationFormatMarkBadMask);
+  __ andr(tmp, obj, tmp);
+  __ bnez(tmp, slow_path);
+
+  // Oop is okay, so we uncolor it.
+  __ srli(obj, obj, ZPointerLoadShift);
+
+  BLOCK_COMMENT("} ZBarrierSetAssembler::try_resolve_weak_handle_in_c2");
+}
+#endif
+
 static uint16_t patch_barrier_relocation_value(int format) {
   switch (format) {
     case ZBarrierRelocationFormatLoadBadMask:
@@ -848,10 +868,10 @@ void ZBarrierSetAssembler::generate_c1_load_barrier_stub(LIR_Assembler* ce,
    // Save x10 unless it is the result or tmp register
    // Set up SP to accommdate parameters and maybe x10.
    if (ref != x10 && tmp != x10) {
-     __ sub(sp, sp, 32);
+     __ subi(sp, sp, 32);
      __ sd(x10, Address(sp, 16));
    } else {
-     __ sub(sp, sp, 16);
+     __ subi(sp, sp, 16);
    }
 
    // Setup arguments and call runtime stub
@@ -963,7 +983,7 @@ void ZBarrierSetAssembler::generate_c1_store_barrier_stub(LIR_Assembler* ce,
 
   __ la(stub->new_zpointer()->as_register(), ce->as_Address(stub->ref_addr()->as_address_ptr()));
 
-  __ sub(sp, sp, 16);
+  __ subi(sp, sp, 16);
   //Setup arguments and call runtime stub
   assert(stub->new_zpointer()->is_valid(), "invariant");
   ce->store_parameter(stub->new_zpointer()->as_register(), 0);

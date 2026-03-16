@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,7 +27,6 @@ package java.awt;
 
 import java.awt.event.*;
 import java.awt.peer.TrayIconPeer;
-import sun.awt.AppContext;
 import sun.awt.SunToolkit;
 import sun.awt.AWTAccessor;
 import sun.awt.HeadlessToolkit;
@@ -118,16 +117,15 @@ public class TrayIcon {
     }
 
     private TrayIcon()
-      throws UnsupportedOperationException, HeadlessException, SecurityException
+      throws UnsupportedOperationException, HeadlessException
     {
-        SystemTray.checkSystemTrayAllowed();
         if (GraphicsEnvironment.isHeadless()) {
             throw new HeadlessException();
         }
         if (!SystemTray.isSupported()) {
             throw new UnsupportedOperationException();
         }
-        SunToolkit.insertTargetMapping(this, AppContext.getAppContext());
+        SunToolkit.insertTargetMapping(this);
     }
 
     /**

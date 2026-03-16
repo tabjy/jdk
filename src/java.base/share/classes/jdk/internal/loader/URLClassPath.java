@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -41,7 +41,6 @@ import java.net.URLStreamHandler;
 import java.net.URLStreamHandlerFactory;
 import java.security.CodeSigner;
 import java.security.cert.Certificate;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -75,7 +74,7 @@ public class URLClassPath {
     private static final String USER_AGENT_JAVA_VERSION = "UA-Java-Version";
     private static final String JAVA_VERSION;
     private static final boolean DEBUG;
-    private static final boolean DISABLE_JAR_CHECKING;
+    private static final boolean JAR_CHECKING_ENABLED;
     private static final boolean DISABLE_CP_URL_CHECK;
     private static final boolean DEBUG_CP_URL_CHECK;
 
@@ -84,7 +83,9 @@ public class URLClassPath {
         JAVA_VERSION = props.getProperty("java.version");
         DEBUG = (props.getProperty("sun.misc.URLClassPath.debug") != null);
         String p = props.getProperty("sun.misc.URLClassPath.disableJarChecking");
-        DISABLE_JAR_CHECKING = p != null ? p.equals("true") || p.isEmpty() : false;
+        // JAR check is disabled by default and will be enabled only if the "disable JAR check"
+        // system property has been set to "false".
+        JAR_CHECKING_ENABLED = "false".equals(p);
 
         // This property will be removed in a later release
         p = props.getProperty("jdk.net.URLClassPath.disableClassPathURLCheck");
@@ -96,11 +97,20 @@ public class URLClassPath {
         DEBUG_CP_URL_CHECK = p != null ? p.equals("true") || p.isEmpty() : false;
     }
 
-    /* The original search path of URLs. */
-    private final ArrayList<URL> path;
+    /* Search path of URLs passed to the constructor or by calls to addURL.
+     * Access is guarded by a monitor on 'searchPath' itself
+     */
+    private final ArrayList<URL> searchPath;
 
-    /* The deque of unopened URLs */
-    private final ArrayDeque<URL> unopenedUrls;
+    /* Index of the next URL in the search path to process.
+     * Access is guarded by a monitor on 'searchPath'
+     */
+    private int nextURL = 0;
+
+    /* List of URLs found during expansion of JAR 'Class-Path' attributes.
+     * Access is guarded by a monitor on 'searchPath'
+     */
+    private final ArrayList<URL> manifestClassPath = new ArrayList<>();
 
     /* The resulting search path of Loaders */
     private final ArrayList<Loader> loaders = new ArrayList<>();
@@ -126,14 +136,8 @@ public class URLClassPath {
      */
     public URLClassPath(URL[] urls,
                         URLStreamHandlerFactory factory) {
-        ArrayList<URL> path = new ArrayList<>(urls.length);
-        ArrayDeque<URL> unopenedUrls = new ArrayDeque<>(urls.length);
-        for (URL url : urls) {
-            path.add(url);
-            unopenedUrls.add(url);
-        }
-        this.path = path;
-        this.unopenedUrls = unopenedUrls;
+        // Reject null URL array or any null element in the array
+        this.searchPath = new ArrayList<>(List.of(urls));
 
         if (factory != null) {
             jarHandler = factory.createURLStreamHandler("jar");
@@ -172,16 +176,7 @@ public class URLClassPath {
                 off = next + 1;
             } while (next != -1);
         }
-
-        // can't use ArrayDeque#addAll or new ArrayDeque(Collection);
-        // it's too early in the bootstrap to trigger use of lambdas
-        int size = path.size();
-        ArrayDeque<URL> unopenedUrls = new ArrayDeque<>(size);
-        for (int i = 0; i < size; i++)
-            unopenedUrls.add(path.get(i));
-
-        this.unopenedUrls = unopenedUrls;
-        this.path = path;
+        this.searchPath = path;
         // the application class loader uses the built-in protocol handler to avoid protocol
         // handler lookup when opening JAR files on the class path.
         this.jarHandler = new sun.net.www.protocol.jar.Handler();
@@ -213,10 +208,9 @@ public class URLClassPath {
     public synchronized void addURL(URL url) {
         if (closed || url == null)
             return;
-        synchronized (unopenedUrls) {
-            if (! path.contains(url)) {
-                unopenedUrls.addLast(url);
-                path.add(url);
+        synchronized (searchPath) {
+            if (! searchPath.contains(url)) {
+                searchPath.add(url);
             }
         }
     }
@@ -247,8 +241,8 @@ public class URLClassPath {
      * Returns the original search path of URLs.
      */
     public URL[] getURLs() {
-        synchronized (unopenedUrls) {
-            return path.toArray(new URL[0]);
+        synchronized (searchPath) {
+            return searchPath.toArray(new URL[0]);
         }
     }
 
@@ -378,6 +372,23 @@ public class URLClassPath {
     }
 
     /*
+     * Returns the next URL to process or null if finished
+     */
+    private URL nextURL() {
+        synchronized (searchPath) {
+            // Check paths discovered during 'Class-Path' expansion first
+            if (!manifestClassPath.isEmpty()) {
+                return manifestClassPath.removeLast();
+            }
+            // Check the regular search path
+            if (nextURL < searchPath.size()) {
+                return searchPath.get(nextURL++);
+            }
+            // All paths exhausted
+            return null;
+        }
+    }
+    /*
      * Returns the Loader at the specified position in the URL search
      * path. The URLs are opened and expanded as needed. Returns null
      * if the specified index is out of range.
@@ -387,14 +398,13 @@ public class URLClassPath {
             return null;
         }
         // Expand URL search path until the request can be satisfied
-        // or unopenedUrls is exhausted.
+        // or all paths are exhausted.
         while (loaders.size() < index + 1) {
-            final URL url;
-            synchronized (unopenedUrls) {
-                url = unopenedUrls.pollFirst();
-                if (url == null)
-                    return null;
+            final URL url = nextURL();
+            if (url == null) {
+                return null;
             }
+
             // Skip this URL if it already has a Loader.
             String urlNoFragString = URLUtil.urlNoFragString(url);
             if (lmap.containsKey(urlNoFragString)) {
@@ -420,7 +430,7 @@ public class URLClassPath {
                 continue;
             }
             if (loaderClassPathURLs != null) {
-                push(loaderClassPathURLs);
+                addManifestClassPaths(loaderClassPathURLs);
             }
             // Finally, add the Loader to the search path.
             loaders.add(loader);
@@ -473,13 +483,12 @@ public class URLClassPath {
     }
 
     /*
-     * Pushes the specified URLs onto the head of unopened URLs.
+     * Adds the specified URLs to the list of 'Class-Path' expanded URLs
      */
-    private void push(URL[] urls) {
-        synchronized (unopenedUrls) {
-            for (int i = urls.length - 1; i >= 0; --i) {
-                unopenedUrls.addFirst(urls[i]);
-            }
+    private void addManifestClassPaths(URL[] urls) {
+        synchronized (searchPath) {
+            // Adding in reversed order since manifestClassPath is consumed tail-first
+            manifestClassPath.addAll(Arrays.asList(urls).reversed());
         }
     }
 
@@ -652,11 +661,12 @@ public class URLClassPath {
             }
         }
 
-        /* Throws if the given jar file is does not start with the correct LOC */
-        @SuppressWarnings("removal")
+        /*
+         * Throws an IOException if the LOC file Header Signature (0x04034b50),
+         * is not found starting at byte 0 of the given jar.
+         */
         static JarFile checkJar(JarFile jar) throws IOException {
-            if (System.getSecurityManager() != null && !DISABLE_JAR_CHECKING
-                && !zipAccess.startsWithLocHeader(jar)) {
+            if (JAR_CHECKING_ENABLED && !zipAccess.startsWithLocHeader(jar)) {
                 IOException x = new IOException("Invalid Jar file");
                 try {
                     jar.close();
@@ -665,7 +675,6 @@ public class URLClassPath {
                 }
                 throw x;
             }
-
             return jar;
         }
 
@@ -903,7 +912,11 @@ public class URLClassPath {
         private FileLoader(URL url) throws IOException {
             super(url);
             String path = url.getFile().replace('/', File.separatorChar);
-            path = ParseUtil.decode(path);
+            try {
+                path = ParseUtil.decode(path);
+            } catch (IllegalArgumentException iae) {
+                throw new IOException(iae);
+            }
             dir = (new File(path)).getCanonicalFile();
             @SuppressWarnings("deprecation")
             var _unused = normalizedBase = new URL(getBaseURL(), ".");

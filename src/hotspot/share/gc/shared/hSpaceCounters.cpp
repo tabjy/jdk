@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,7 +22,6 @@
  *
  */
 
-#include "precompiled.hpp"
 #include "gc/shared/hSpaceCounters.hpp"
 #include "memory/allocation.inline.hpp"
 #include "memory/resourceArea.hpp"
@@ -82,14 +81,3 @@ void HSpaceCounters::update_all(size_t capacity, size_t used) {
   update_capacity(capacity);
   update_used(used);
 }
-
-debug_only(
-  // for security reasons, we do not allow arbitrary reads from
-  // the counters as they may live in shared memory.
-  jlong HSpaceCounters::used() {
-    return _used->get_value();
-  }
-  jlong HSpaceCounters::capacity() {
-    return _used->get_value();
-  }
-)

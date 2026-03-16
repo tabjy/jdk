@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,7 +22,6 @@
  *
  */
 
-#include "precompiled.hpp"
 #include "ci/ciMethodData.hpp"
 #include "classfile/vmSymbols.hpp"
 #include "compiler/compileLog.hpp"
@@ -42,6 +41,7 @@
 #include "opto/opaquenode.hpp"
 #include "opto/parse.hpp"
 #include "opto/runtime.hpp"
+#include "opto/subtypenode.hpp"
 #include "runtime/deoptimization.hpp"
 #include "runtime/sharedRuntime.hpp"
 
@@ -966,12 +966,28 @@ void Parse::jump_switch_ranges(Node* key_val, SwitchRange *lo, SwitchRange *hi, 
     _max_switch_depth = 0;
     _est_switch_depth = log2i_graceful((hi - lo + 1) - 1) + 1;
   }
+  SwitchRange* orig_lo = lo;
+  SwitchRange* orig_hi = hi;
 #endif
 
-  assert(lo <= hi, "must be a non-empty set of ranges");
-  if (lo == hi) {
-    jump_if_always_fork(lo->dest(), trim_ranges && lo->cnt() == 0);
-  } else {
+  // The lower-range processing is done iteratively to avoid O(N) stack depth
+  // when the profiling-based pivot repeatedly selects mid==lo (JDK-8366138).
+  // The upper-range processing remains recursive but is only reached for
+  // balanced splits, bounding its depth to O(log N).
+  // Termination: every iteration either exits or strictly decreases hi-lo:
+  //   lo == mid && mid < hi, increments lo
+  //   lo < mid <= hi, sets hi = mid - 1.
+  for (int depth = switch_depth;; depth++) {
+#ifndef PRODUCT
+    _max_switch_depth = MAX2(depth, _max_switch_depth);
+#endif
+
+    assert(lo <= hi, "must be a non-empty set of ranges");
+    if (lo == hi) {
+      jump_if_always_fork(lo->dest(), trim_ranges && lo->cnt() == 0);
+      break;
+    }
+
     assert(lo->hi() == (lo+1)->lo()-1, "contiguous ranges");
     assert(hi->lo() == (hi-1)->hi()+1, "contiguous ranges");
 
@@ -981,7 +997,12 @@ void Parse::jump_switch_ranges(Node* key_val, SwitchRange *lo, SwitchRange *hi, 
     float total_cnt = sum_of_cnts(lo, hi);
 
     int nr = hi - lo + 1;
-    if (UseSwitchProfiling) {
+    // With total_cnt==0 the profiling pivot degenerates to mid==lo
+    // (0 >= 0/2), producing a linear chain of If nodes instead of a
+    // balanced tree. A balanced tree is strictly better here: all paths
+    // are cold, so a balanced split gives fewer comparisons at runtime
+    // and avoids pathological memory usage in the optimizer.
+    if (UseSwitchProfiling && total_cnt > 0) {
       // Don't keep the binary search tree balanced: pick up mid point
       // that split frequencies in half.
       float cnt = 0;
@@ -1002,7 +1023,7 @@ void Parse::jump_switch_ranges(Node* key_val, SwitchRange *lo, SwitchRange *hi, 
       assert(nr != 2 || mid == hi,   "should pick higher of 2");
       assert(nr != 3 || mid == hi-1, "should pick middle of 3");
     }
-
+    assert(mid != nullptr, "mid must be set");
 
     Node *test_val = _gvn.intcon(mid == lo ? mid->hi() : mid->lo());
 
@@ -1025,7 +1046,7 @@ void Parse::jump_switch_ranges(Node* key_val, SwitchRange *lo, SwitchRange *hi, 
         Node   *iffalse = _gvn.transform( new IfFalseNode(iff_lt) );
         { PreserveJVMState pjvms(this);
           set_control(iffalse);
-          jump_switch_ranges(key_val, mid+1, hi, switch_depth+1);
+          jump_switch_ranges(key_val, mid+1, hi, depth+1);
         }
         set_control(iftrue);
       }
@@ -1043,21 +1064,22 @@ void Parse::jump_switch_ranges(Node* key_val, SwitchRange *lo, SwitchRange *hi, 
         Node *iffalse = _gvn.transform( new IfFalseNode(iff_ge) );
         { PreserveJVMState pjvms(this);
           set_control(iftrue);
-          jump_switch_ranges(key_val, mid == lo ? mid+1 : mid, hi, switch_depth+1);
+          jump_switch_ranges(key_val, mid == lo ? mid+1 : mid, hi, depth+1);
         }
         set_control(iffalse);
       }
     }
 
-    // in any case, process the lower range
+    // Process the lower range: iterate instead of recursing.
     if (mid == lo) {
       if (mid->is_singleton()) {
-        jump_switch_ranges(key_val, lo+1, hi, switch_depth+1);
+        lo++;
       } else {
         jump_if_always_fork(lo->dest(), trim_ranges && lo->cnt() == 0);
+        break;
       }
     } else {
-      jump_switch_ranges(key_val, lo, mid-1, switch_depth+1);
+      hi = mid - 1;
     }
   }
 
@@ -1072,23 +1094,22 @@ void Parse::jump_switch_ranges(Node* key_val, SwitchRange *lo, SwitchRange *hi, 
   }
 
 #ifndef PRODUCT
-  _max_switch_depth = MAX2(switch_depth, _max_switch_depth);
   if (TraceOptoParse && Verbose && WizardMode && switch_depth == 0) {
     SwitchRange* r;
     int nsing = 0;
-    for( r = lo; r <= hi; r++ ) {
+    for (r = orig_lo; r <= orig_hi; r++) {
       if( r->is_singleton() )  nsing++;
     }
     tty->print(">>> ");
     _method->print_short_name();
     tty->print_cr(" switch decision tree");
     tty->print_cr("    %d ranges (%d singletons), max_depth=%d, est_depth=%d",
-                  (int) (hi-lo+1), nsing, _max_switch_depth, _est_switch_depth);
+                  (int) (orig_hi-orig_lo+1), nsing, _max_switch_depth, _est_switch_depth);
     if (_max_switch_depth > _est_switch_depth) {
       tty->print_cr("******** BAD SWITCH DEPTH ********");
     }
     tty->print("   ");
-    for( r = lo; r <= hi; r++ ) {
+    for (r = orig_lo; r <= orig_hi; r++) {
       r->print();
     }
     tty->cr();
@@ -1096,33 +1117,16 @@ void Parse::jump_switch_ranges(Node* key_val, SwitchRange *lo, SwitchRange *hi, 
 #endif
 }
 
-void Parse::modf() {
-  Node *f2 = pop();
-  Node *f1 = pop();
-  Node* c = make_runtime_call(RC_LEAF, OptoRuntime::modf_Type(),
-                              CAST_FROM_FN_PTR(address, SharedRuntime::frem),
-                              "frem", nullptr, //no memory effects
-                              f1, f2);
-  Node* res = _gvn.transform(new ProjNode(c, TypeFunc::Parms + 0));
+Node* Parse::floating_point_mod(Node* a, Node* b, BasicType type) {
+  assert(type == BasicType::T_FLOAT || type == BasicType::T_DOUBLE, "only float and double are floating points");
+  CallLeafPureNode* mod = type == BasicType::T_DOUBLE ? static_cast<CallLeafPureNode*>(new ModDNode(C, a, b)) : new ModFNode(C, a, b);
 
-  push(res);
-}
-
-void Parse::modd() {
-  Node *d2 = pop_pair();
-  Node *d1 = pop_pair();
-  Node* c = make_runtime_call(RC_LEAF, OptoRuntime::Math_DD_D_Type(),
-                              CAST_FROM_FN_PTR(address, SharedRuntime::drem),
-                              "drem", nullptr, //no memory effects
-                              d1, top(), d2, top());
-  Node* res_d   = _gvn.transform(new ProjNode(c, TypeFunc::Parms + 0));
-
-#ifdef ASSERT
-  Node* res_top = _gvn.transform(new ProjNode(c, TypeFunc::Parms + 1));
-  assert(res_top == top(), "second value must be top");
-#endif
-
-  push_pair(res_d);
+  set_predefined_input_for_runtime_call(mod);
+  mod = _gvn.transform(mod)->as_CallLeafPure();
+  set_predefined_output_for_runtime_call(mod);
+  Node* result = _gvn.transform(new ProjNode(mod, TypeFunc::Parms + 0));
+  record_for_igvn(mod);
+  return result;
 }
 
 void Parse::l2f() {
@@ -1737,38 +1741,108 @@ static Node* extract_obj_from_klass_load(PhaseGVN* gvn, Node* n) {
   return obj;
 }
 
+// Matches exact and inexact type check IR shapes during parsing.
+// On successful match, returns type checked object node and its type after successful check
+// as out parameters.
+static bool match_type_check(PhaseGVN& gvn,
+                             BoolTest::mask btest,
+                             Node* con, const Type* tcon,
+                             Node* val, const Type* tval,
+                             Node** obj, const TypeOopPtr** cast_type) { // out-parameters
+  // Look for opportunities to sharpen the type of a node whose klass is compared with a constant klass.
+  // The constant klass being tested against can come from many bytecode instructions (implicitly or explicitly),
+  // and also from profile data used by speculative casts.
+  if (btest == BoolTest::eq && tcon->isa_klassptr()) {
+    // Found:
+    //   Bool(CmpP(LoadKlass(obj._klass), ConP(Foo.klass)), [eq])
+    // or the narrowOop equivalent.
+    (*obj) = extract_obj_from_klass_load(&gvn, val);
+    (*cast_type) = tcon->isa_klassptr()->as_instance_type();
+    return true; // found
+  }
+
+  // Match an instanceof check.
+  // During parsing its IR shape is not canonicalized yet.
+  //
+  //             obj superklass
+  //              |    |
+  //           SubTypeCheck
+  //                |
+  //               Bool [eq] / [ne]
+  //                |
+  //                If
+  //               / \
+  //              T   F
+  //               \ /
+  //              Region
+  //                 \  ConI ConI
+  //                  \  |  /
+  //          val ->    Phi  ConI  <- con
+  //                     \  /
+  //                     CmpI
+  //                      |
+  //                    Bool [btest]
+  //                      |
+  //
+  if (tval->isa_int() && val->is_Phi() && val->in(0)->as_Region()->is_diamond()) {
+    RegionNode* diamond = val->in(0)->as_Region();
+    IfNode* if1 = diamond->in(1)->in(0)->as_If();
+    BoolNode* b1 = if1->in(1)->isa_Bool();
+    if (b1 != nullptr && b1->in(1)->isa_SubTypeCheck()) {
+      assert(b1->_test._test == BoolTest::eq ||
+             b1->_test._test == BoolTest::ne, "%d", b1->_test._test);
+
+      ProjNode* success_proj = if1->proj_out(b1->_test._test == BoolTest::eq ? 1 : 0);
+      int idx = diamond->find_edge(success_proj);
+      assert(idx == 1 || idx == 2, "");
+      Node* vcon = val->in(idx);
+
+      assert(val->find_edge(con) > 0, "");
+      if ((btest == BoolTest::eq && vcon == con) || (btest == BoolTest::ne && vcon != con)) {
+        SubTypeCheckNode* sub = b1->in(1)->as_SubTypeCheck();
+        Node* obj_or_subklass = sub->in(SubTypeCheckNode::ObjOrSubKlass);
+        Node* superklass = sub->in(SubTypeCheckNode::SuperKlass);
+
+        if (gvn.type(obj_or_subklass)->isa_oopptr()) {
+          const TypeKlassPtr* klass_ptr_type = gvn.type(superklass)->is_klassptr();
+          const TypeKlassPtr* improved_klass_ptr_type = klass_ptr_type->try_improve();
+
+          (*obj) = obj_or_subklass;
+          (*cast_type) = improved_klass_ptr_type->cast_to_exactness(false)->as_instance_type();
+          return true; // found
+        }
+      }
+    }
+  }
+  return false; // not found
+}
+
 void Parse::sharpen_type_after_if(BoolTest::mask btest,
                                   Node* con, const Type* tcon,
                                   Node* val, const Type* tval) {
-  // Look for opportunities to sharpen the type of a node
-  // whose klass is compared with a constant klass.
-  if (btest == BoolTest::eq && tcon->isa_klassptr()) {
-    Node* obj = extract_obj_from_klass_load(&_gvn, val);
-    const TypeOopPtr* con_type = tcon->isa_klassptr()->as_instance_type();
-    if (obj != nullptr && (con_type->isa_instptr() || con_type->isa_aryptr())) {
-       // Found:
-       //   Bool(CmpP(LoadKlass(obj._klass), ConP(Foo.klass)), [eq])
-       // or the narrowOop equivalent.
-       const Type* obj_type = _gvn.type(obj);
-       const TypeOopPtr* tboth = obj_type->join_speculative(con_type)->isa_oopptr();
-       if (tboth != nullptr && tboth->klass_is_exact() && tboth != obj_type &&
-           tboth->higher_equal(obj_type)) {
-          // obj has to be of the exact type Foo if the CmpP succeeds.
-          int obj_in_map = map()->find_edge(obj);
-          JVMState* jvms = this->jvms();
-          if (obj_in_map >= 0 &&
-              (jvms->is_loc(obj_in_map) || jvms->is_stk(obj_in_map))) {
-            TypeNode* ccast = new CheckCastPPNode(control(), obj, tboth);
-            const Type* tcc = ccast->as_Type()->type();
-            assert(tcc != obj_type && tcc->higher_equal(obj_type), "must improve");
-            // Delay transform() call to allow recovery of pre-cast value
-            // at the control merge.
-            _gvn.set_type_bottom(ccast);
-            record_for_igvn(ccast);
-            // Here's the payoff.
-            replace_in_map(obj, ccast);
-          }
-       }
+  Node* obj = nullptr;
+  const TypeOopPtr* cast_type = nullptr;
+  // Insert a cast node with a narrowed type after a successful type check.
+  if (match_type_check(_gvn, btest, con, tcon, val, tval,
+                       &obj, &cast_type)) {
+    assert(obj != nullptr && cast_type != nullptr, "missing type check info");
+    const Type* obj_type = _gvn.type(obj);
+    const TypeOopPtr* tboth = obj_type->join_speculative(cast_type)->isa_oopptr();
+    if (tboth != nullptr && tboth != obj_type && tboth->higher_equal(obj_type)) {
+      int obj_in_map = map()->find_edge(obj);
+      JVMState* jvms = this->jvms();
+      if (obj_in_map >= 0 &&
+          (jvms->is_loc(obj_in_map) || jvms->is_stk(obj_in_map))) {
+        TypeNode* ccast = new CheckCastPPNode(control(), obj, tboth);
+        const Type* tcc = ccast->as_Type()->type();
+        assert(tcc != obj_type && tcc->higher_equal(obj_type), "must improve");
+        // Delay transform() call to allow recovery of pre-cast value
+        // at the control merge.
+        _gvn.set_type_bottom(ccast);
+        record_for_igvn(ccast);
+        // Here's the payoff.
+        replace_in_map(obj, ccast);
+      }
     }
   }
 
@@ -2080,19 +2154,19 @@ void Parse::do_one_bytecode() {
 
   // double stores
   case Bytecodes::_dstore_0:
-    set_pair_local( 0, dprecision_rounding(pop_pair()) );
+    set_pair_local( 0, pop_pair() );
     break;
   case Bytecodes::_dstore_1:
-    set_pair_local( 1, dprecision_rounding(pop_pair()) );
+    set_pair_local( 1, pop_pair() );
     break;
   case Bytecodes::_dstore_2:
-    set_pair_local( 2, dprecision_rounding(pop_pair()) );
+    set_pair_local( 2, pop_pair() );
     break;
   case Bytecodes::_dstore_3:
-    set_pair_local( 3, dprecision_rounding(pop_pair()) );
+    set_pair_local( 3, pop_pair() );
     break;
   case Bytecodes::_dstore:
-    set_pair_local( iter().get_index(), dprecision_rounding(pop_pair()) );
+    set_pair_local( iter().get_index(), pop_pair() );
     break;
 
   case Bytecodes::_pop:  dec_sp(1);   break;
@@ -2274,47 +2348,35 @@ void Parse::do_one_bytecode() {
     b = pop();
     a = pop();
     c = _gvn.transform( new SubFNode(a,b) );
-    d = precision_rounding(c);
-    push( d );
+    push(c);
     break;
 
   case Bytecodes::_fadd:
     b = pop();
     a = pop();
     c = _gvn.transform( new AddFNode(a,b) );
-    d = precision_rounding(c);
-    push( d );
+    push(c);
     break;
 
   case Bytecodes::_fmul:
     b = pop();
     a = pop();
     c = _gvn.transform( new MulFNode(a,b) );
-    d = precision_rounding(c);
-    push( d );
+    push(c);
     break;
 
   case Bytecodes::_fdiv:
     b = pop();
     a = pop();
     c = _gvn.transform( new DivFNode(nullptr,a,b) );
-    d = precision_rounding(c);
-    push( d );
+    push(c);
     break;
 
   case Bytecodes::_frem:
-    if (Matcher::has_match_rule(Op_ModF)) {
-      // Generate a ModF node.
-      b = pop();
-      a = pop();
-      c = _gvn.transform( new ModFNode(nullptr,a,b) );
-      d = precision_rounding(c);
-      push( d );
-    }
-    else {
-      // Generate a call.
-      modf();
-    }
+    // Generate a ModF node.
+    b = pop();
+    a = pop();
+    push(floating_point_mod(a, b, BasicType::T_FLOAT));
     break;
 
   case Bytecodes::_fcmpl:
@@ -2357,8 +2419,6 @@ void Parse::do_one_bytecode() {
   case Bytecodes::_d2f:
     a = pop_pair();
     b = _gvn.transform( new ConvD2FNode(a));
-    // This breaks _227_mtrt (speed & correctness) and _222_mpegaudio (speed)
-    //b = _gvn.transform(new RoundFloatNode(nullptr, b) );
     push( b );
     break;
 
@@ -2366,11 +2426,6 @@ void Parse::do_one_bytecode() {
     if (Matcher::convL2FSupported()) {
       a = pop_pair();
       b = _gvn.transform( new ConvL2FNode(a));
-      // For x86_32.ad, FILD doesn't restrict precision to 24 or 53 bits.
-      // Rather than storing the result into an FP register then pushing
-      // out to memory to round, the machine instruction that implements
-      // ConvL2D is responsible for rounding.
-      // c = precision_rounding(b);
       push(b);
     } else {
       l2f();
@@ -2380,8 +2435,6 @@ void Parse::do_one_bytecode() {
   case Bytecodes::_l2d:
     a = pop_pair();
     b = _gvn.transform( new ConvL2DNode(a));
-    // For x86_32.ad, rounding is always necessary (see _l2f above).
-    // c = dprecision_rounding(b);
     push_pair(b);
     break;
 
@@ -2401,32 +2454,28 @@ void Parse::do_one_bytecode() {
     b = pop_pair();
     a = pop_pair();
     c = _gvn.transform( new SubDNode(a,b) );
-    d = dprecision_rounding(c);
-    push_pair( d );
+    push_pair(c);
     break;
 
   case Bytecodes::_dadd:
     b = pop_pair();
     a = pop_pair();
     c = _gvn.transform( new AddDNode(a,b) );
-    d = dprecision_rounding(c);
-    push_pair( d );
+    push_pair(c);
     break;
 
   case Bytecodes::_dmul:
     b = pop_pair();
     a = pop_pair();
     c = _gvn.transform( new MulDNode(a,b) );
-    d = dprecision_rounding(c);
-    push_pair( d );
+    push_pair(c);
     break;
 
   case Bytecodes::_ddiv:
     b = pop_pair();
     a = pop_pair();
     c = _gvn.transform( new DivDNode(nullptr,a,b) );
-    d = dprecision_rounding(c);
-    push_pair( d );
+    push_pair(c);
     break;
 
   case Bytecodes::_dneg:
@@ -2436,20 +2485,10 @@ void Parse::do_one_bytecode() {
     break;
 
   case Bytecodes::_drem:
-    if (Matcher::has_match_rule(Op_ModD)) {
-      // Generate a ModD node.
-      b = pop_pair();
-      a = pop_pair();
-      // a % b
-
-      c = _gvn.transform( new ModDNode(nullptr,a,b) );
-      d = dprecision_rounding(c);
-      push_pair( d );
-    }
-    else {
-      // Generate a call.
-      modd();
-    }
+    // Generate a ModD node.
+    b = pop_pair();
+    a = pop_pair();
+    push_pair(floating_point_mod(a, b, BasicType::T_DOUBLE));
     break;
 
   case Bytecodes::_dcmpl:
@@ -2621,8 +2660,7 @@ void Parse::do_one_bytecode() {
   case Bytecodes::_i2f:
     a = pop();
     b = _gvn.transform( new ConvI2FNode(a) ) ;
-    c = precision_rounding(b);
-    push (b);
+    push(b);
     break;
 
   case Bytecodes::_i2d:
@@ -2836,8 +2874,10 @@ void Parse::do_one_bytecode() {
     jio_snprintf(buffer, sizeof(buffer), "Bytecode %d: %s", bci(), Bytecodes::name(bc()));
     bool old = printer->traverse_outs();
     printer->set_traverse_outs(true);
+    printer->set_parse(this);
     printer->print_graph(buffer);
     printer->set_traverse_outs(old);
+    printer->set_parse(nullptr);
   }
 #endif
 }
