@@ -1353,6 +1353,11 @@ public:
     BoolTest::mask _mask;
     float _cl_prob;
 
+    bool _should_speculatively_narrow_limit;
+    Node* _narrowed_cmp;
+    Node* _narrowed_incr;
+    Node* _narrowed_limit;
+
   public:
     LoopExitTest(const Node* back_control, const IdealLoopTree* loop, PhaseIdealLoop* phase) :
       _is_valid(false),
@@ -1363,23 +1368,38 @@ public:
       _incr(nullptr),
       _limit(nullptr),
       _mask(BoolTest::illegal),
-      _cl_prob(0.0f) {}
+      _cl_prob(0.0f),
+      _should_speculatively_narrow_limit(false),
+      _narrowed_cmp(nullptr),
+      _narrowed_incr(nullptr),
+      _narrowed_limit(nullptr) {}
 
     void build();
     void canonicalize_mask(jlong stride_con);
 
     bool is_valid_with_bt(BasicType bt) const {
-      return _is_valid && _cmp != nullptr && _cmp->Opcode() == Op_Cmp(bt);
+      return _is_valid && cmp() != nullptr && cmp()->Opcode() == Op_Cmp(bt);
     }
 
     bool should_include_limit() const { return _mask == BoolTest::le || _mask == BoolTest::ge; }
 
     const Node* back_control() const { return _back_control; }
-    CmpNode* cmp() const { return _cmp->as_Cmp(); }
-    Node* incr() const { return _incr; }
-    Node* limit() const { return _limit; }
     BoolTest::mask mask() const { return _mask; }
     float cl_prob() const { return _cl_prob; }
+
+    CmpNode* cmp() const {
+      return _should_speculatively_narrow_limit ? _narrowed_cmp->isa_Cmp() : _cmp->isa_Cmp();
+    }
+    Node* incr() const {
+      return _should_speculatively_narrow_limit ? _narrowed_incr : _incr;
+    }
+    Node* limit() const {
+      return _should_speculatively_narrow_limit ? _narrowed_limit : _limit;
+    }
+
+    bool can_speculatively_narrow_limit(PhaseIterGVN& igvn);
+    Node* speculatively_narrow_limit(PhaseIterGVN& igvn) const;
+    bool should_speculatively_narrow_limit() const { return _should_speculatively_narrow_limit; }
   };
 
   class LoopIVIncr {
@@ -2166,7 +2186,7 @@ class CountedLoopConverter {
   SafePointNode* find_safepoint(Node* iftrue);
   bool is_safepoint_invalid(SafePointNode* sfpt) const;
 
-  ParsePredicateNode* parse_predicate() const;
+  ParsePredicateNode* loop_limit_check_parse_predicate() const;
 
  public:
   CountedLoopConverter(PhaseIdealLoop* phase, Node* head, IdealLoopTree* loop, const BasicType iv_bt)
@@ -2182,7 +2202,6 @@ class CountedLoopConverter {
   }
 
   bool is_counted_loop();
-  bool try_reconfigure_for_speculative_long_limit();
   IdealLoopTree* convert();
 
   DEBUG_ONLY(bool should_stress_long_counted_loop();)

@@ -1779,6 +1779,66 @@ void PhaseIdealLoop::LoopExitTest::canonicalize_mask(jlong stride_con) {
   }
 }
 
+// When comparing an int incrementor with long limit, check if the limit is within int range. If so, treat it as an int
+// counted loop but deoptimize if the limit is out of int range.
+// This is common pattern with "for (int i =...; i < long_limit; ...)" where int "i" is implicitly promoted to long,
+// i.e., "(long) i < long_limit", and therefore making it not an int counted loop without this transformation.
+//
+// In summary, we transform
+//
+//  for (int i = 0; (long) i < long_limit; i++) {...}
+//
+// to
+//
+//  if (int_min <= long_limit && long_limit <= int_max) {
+//    for (int i = 0; i < (int) long_limit; i++) {...}
+//  } else {
+//    trap: loop_limit_check
+//  }
+bool PhaseIdealLoop::LoopExitTest::can_speculatively_narrow_limit(PhaseIterGVN& igvn) {
+  assert(!is_valid_with_bt(T_INT), "must not be a valid int loop");
+
+  if (!is_valid_with_bt(T_LONG) || _incr->Opcode() != Op_ConvI2L) {
+    _should_speculatively_narrow_limit = false;
+    return false;
+  }
+
+  // Replace exit test nodes. Need to revert changes if this still doesn't make it a counted loop.
+  _narrowed_incr = _incr->in(1);
+  assert(_narrowed_incr != nullptr, "");
+
+  // Optimistically transform "(long) i < long_limit" to "i < (int) long_limit".
+  _narrowed_limit = igvn.register_new_node_with_optimizer(new ConvL2INode(_limit), _limit);
+  _phase->set_early_ctrl(_narrowed_limit, _phase->get_ctrl(_limit));
+
+  _narrowed_cmp = _cmp->in(1) == _incr
+                        ? new CmpINode(_narrowed_incr, _narrowed_limit)
+                        : new CmpINode(_narrowed_limit, _narrowed_incr);
+  igvn.register_new_node_with_optimizer(_narrowed_cmp, _cmp);
+  _phase->set_early_ctrl(_narrowed_cmp, _phase->get_ctrl(_cmp));
+
+  _should_speculatively_narrow_limit = true;
+  return true;
+}
+
+Node* PhaseIdealLoop::LoopExitTest::speculatively_narrow_limit(PhaseIterGVN& igvn) const {
+  assert(_should_speculatively_narrow_limit, "must call can_speculatively_narrow_limit() first");
+
+  // back_control[0] -> iff[1] -> bool[1] -> cmp
+  Node* bol = _back_control->in(0)->in(1);
+  igvn.rehash_node_delayed(bol);
+  bol->replace_edge(_cmp, _narrowed_cmp, &igvn);
+
+  assert(_loop->is_invariant(_narrowed_limit), "limit must be a loop invariant");
+
+  // Finally, we assumed the limit is within int range, so add guards and traps if it's not.
+  Node* i2l_limit = igvn.register_new_node_with_optimizer(new ConvI2LNode(_narrowed_limit));
+  Node* cmp_limit = new CmpLNode(i2l_limit, _limit);
+  Node* bol_limit = new BoolNode(cmp_limit, BoolTest::eq);
+
+  return bol_limit;
+}
+
 void PhaseIdealLoop::LoopIVIncr::build(Node* old_incr) {
   _is_valid = false;
 
@@ -1858,8 +1918,9 @@ void CountedLoopConverter::LoopStructure::build() {
   }
 
   _exit_test.build();
-  if (!_exit_test.is_valid_with_bt(_iv_bt)) {
-    return; // Avoid pointer & float & 64-bit compares
+  if (!_exit_test.is_valid_with_bt(_iv_bt) &&
+      !(_iv_bt == T_INT && _exit_test.can_speculatively_narrow_limit(_phase->igvn()))) {
+    return; // Avoid pointer & float
   }
 
   Node* incr = _exit_test.incr();
@@ -2070,21 +2131,14 @@ bool CountedLoopConverter::stress_long_counted_loop() {
 
 bool PhaseIdealLoop::try_convert_to_counted_loop(Node* head, IdealLoopTree*& loop, const BasicType iv_bt) {
   CountedLoopConverter converter(this, head, loop, iv_bt);
-  bool is_counted = converter.is_counted_loop();
-
+  if (converter.is_counted_loop()) {
 #ifdef ASSERT
-  // Stress by converting int counted loops to long counted loops
-  if (is_counted && converter.should_stress_long_counted_loop() && converter.stress_long_counted_loop()) {
-    return false;
-  }
+    // Stress by converting int counted loops to long counted loops
+    if (converter.should_stress_long_counted_loop() && converter.stress_long_counted_loop()) {
+      return false;
+    }
 #endif
 
-  // Convert int counted loops with long limits to int limits
-  if (!is_counted && iv_bt == T_INT) {
-    is_counted = converter.try_reconfigure_for_speculative_long_limit();
-  }
-
-  if (is_counted) {
     loop = converter.convert();
     return true;
   }
@@ -2336,12 +2390,12 @@ bool CountedLoopConverter::is_counted_loop() {
     //     limit + final_correction = adjusted_limit - 1 + stride <= max_int
     assert(!_head->as_Loop()->is_loop_nest_inner_loop(), "loop was transformed");
 
-    ParsePredicateNode* loop_limit_check_parse_predicate = parse_predicate();
-    if (loop_limit_check_parse_predicate == nullptr) {
+    ParsePredicateNode* parse_predicate = loop_limit_check_parse_predicate();
+    if (parse_predicate == nullptr) {
       return false;
     }
 
-    Node* parse_predicate_entry = loop_limit_check_parse_predicate->in(0);
+    Node* parse_predicate_entry = parse_predicate->in(0);
     if (!_phase->is_dominator(_phase->get_ctrl(_structure.limit()), parse_predicate_entry)) {
       return false;
     }
@@ -2376,12 +2430,12 @@ bool CountedLoopConverter::is_counted_loop() {
     // a requirement). We transform the loop exit check by using a less-than-operator. By doing so, we must always
     // check that init < limit. Otherwise, we could have a different number of iterations at runtime.
 
-    ParsePredicateNode* loop_limit_check_parse_predicate = parse_predicate();
-    if (loop_limit_check_parse_predicate == nullptr) {
+    ParsePredicateNode* parse_predicate = loop_limit_check_parse_predicate();
+    if (parse_predicate == nullptr) {
       return false;
     }
 
-    Node* parse_predicate_entry = loop_limit_check_parse_predicate->in(0);
+    Node* parse_predicate_entry = parse_predicate->in(0);
     if (!_phase->is_dominator(_phase->get_ctrl(_structure.limit()), parse_predicate_entry) ||
         !_phase->is_dominator(_phase->get_ctrl(init_trip), parse_predicate_entry)) {
       return false;
@@ -2535,7 +2589,7 @@ bool CountedLoopConverter::is_safepoint_invalid(SafePointNode* sfpt) const {
   return false;
 }
 
-ParsePredicateNode* CountedLoopConverter::parse_predicate() const {
+ParsePredicateNode* CountedLoopConverter::loop_limit_check_parse_predicate() const {
   Node* init_control = _head->in(LoopNode::EntryControl);
   const Predicates predicates(init_control);
   const PredicateBlock* loop_limit_check_predicate_block = predicates.loop_limit_check_predicate_block();
@@ -2555,86 +2609,16 @@ ParsePredicateNode* CountedLoopConverter::parse_predicate() const {
   return loop_limit_check_predicate_block->parse_predicate();
 }
 
-// When comparing an int incrementor with long limit, check if the limit is within int range. If so, treat it as an int
-// counted loop but deoptimize if the limit is out of int range.
-// This is common pattern with "for (int i =...; i < long_limit; ...)" where int "i" is implicitly promoted to long,
-// i.e., "(long) i < long_limit", and therefore making it not an int counted loop without this transformation.
-//
-// In summary, we transform
-//
-//  for (int i = 0; (long) i < long_limit; i++) {...}
-//
-// to
-//
-//  if (int_min <= long_limit && long_limit <= int_max) {
-//    for (int i = 0; i < (int) long_limit; i++) {...}
-//  } else {
-//    trap: loop_limit_check
-//  }
-bool CountedLoopConverter::try_reconfigure_for_speculative_long_limit() {
-  assert(_iv_bt == T_INT, "not a int loop");
-
-  // Check exit test is a "(long) i < long_limit" pattern.
-  PhaseIdealLoop::LoopExitTest exit_test = _structure.exit_test();
-  Node* incr = exit_test.incr();
-  if (!exit_test.is_valid_with_bt(T_LONG) || incr->Opcode() != Op_ConvI2L) {
-    return false;
-  }
-
-  // Make sure there is a Loop Limit Check Parse Predicate for us to insert the Loop Limit Check Predicate above it.
-  ParsePredicateNode* loop_limit_check_parse_predicate = parse_predicate();
-  if (loop_limit_check_parse_predicate == nullptr) {
-    return false;
-  }
-
-  Node* parse_predicate_entry = loop_limit_check_parse_predicate->in(0);
-  if (!_phase->is_dominator(_phase->get_ctrl(_structure.limit()), parse_predicate_entry)) {
-    return false;
-  }
-
-  PhaseIterGVN& igvn = _phase->igvn();
-
-  // Replace exit test nodes. Need to revert changes if this still doesn't make it a counted loop.
-  Node* new_incr = incr->in(1);
-
-  // Optimistically transform "(long) i < long_limit" to "i < (int) long_limit".
-  Node* limit = exit_test.limit();
-  Node* new_limit = igvn.register_new_node_with_optimizer(new ConvL2INode(limit), limit);
-  _phase->set_early_ctrl(new_limit, _phase->get_ctrl(limit));
-
-  Node* cmp = exit_test.cmp();
-  Node* new_cmp = cmp->in(1) == incr ? new CmpINode(new_incr, new_limit) : new CmpINode(new_limit, new_incr);
-  igvn.register_new_node_with_optimizer(new_cmp, cmp);
-  _phase->set_early_ctrl(new_cmp, _phase->get_ctrl(cmp));
-
-  // back_control[0] -> iff[1] -> bool[1] -> cmp
-  Node* bol = exit_test.back_control()->in(0)->in(1);
-  igvn.rehash_node_delayed(bol);
-  bol->replace_edge(cmp, new_cmp, &igvn);
-
-  // Check if it's a counted loop after casting limit to int
-  if (!is_counted_loop()) {
-    // Still not a counted loop, revert back to the original cmp and call it a day.
-    igvn.rehash_node_delayed(bol);
-    bol->replace_edge(new_cmp, cmp, &igvn);
-    return false;
-  }
-
-  assert(_loop->is_invariant(new_limit), "limit must be a loop invariant");
-
-  // Finally, we assumed the limit is within int range, so add guards and traps if it's not.
-  Node* i2l_limit = igvn.register_new_node_with_optimizer(new ConvI2LNode(new_limit));
-  Node* cmp_limit = new CmpLNode(i2l_limit, limit);
-  Node* bol_limit = new BoolNode(cmp_limit, BoolTest::eq);
-  insert_loop_limit_check_predicate(_head->in(LoopNode::EntryControl)->as_IfTrue(), bol_limit);
-
-  return true; // Ready to call convert()
-}
-
 IdealLoopTree* CountedLoopConverter::convert() {
   assert(_checked_for_counted_loop, "must check for counted loop before conversion");
 
   PhaseIterGVN* igvn = &_phase->igvn();
+  PhaseIdealLoop::LoopExitTest exit_test = _structure.exit_test();
+
+  if (exit_test.should_speculatively_narrow_limit()) {
+    Node* guard_bool = exit_test.speculatively_narrow_limit(*igvn);
+    insert_loop_limit_check_predicate(_head->in(LoopNode::EntryControl)->as_IfTrue(), guard_bool);
+  }
 
   if (_should_insert_stride_overflow_limit_check) {
     insert_stride_overflow_limit_check();
@@ -2670,8 +2654,8 @@ IdealLoopTree* CountedLoopConverter::convert() {
     adjusted_limit = igvn->transform(AddNode::make(_structure.limit(), _structure.stride().stride_node(), _iv_bt));
   }
 
-  BoolTest::mask mask = _structure.exit_test().mask();
-  if (_structure.exit_test().should_include_limit()) {
+  BoolTest::mask mask = exit_test.mask();
+  if (exit_test.should_include_limit()) {
     // The limit check guaranties that 'limit <= (max_jint - stride)' so
     // we can convert 'i <= limit' to 'i < limit+1' since stride != 0.
     Node* one = (_structure.stride_con() > 0) ? igvn->integercon(1, _iv_bt) : igvn->integercon(-1, _iv_bt);
@@ -2715,7 +2699,7 @@ IdealLoopTree* CountedLoopConverter::convert() {
   Node* iff = iftrue->in(0);
 
   // Replace the old CmpNode with new adjusted_limit
-  Node* new_cmp = _structure.exit_test().cmp()->clone();
+  Node* new_cmp = exit_test.cmp()->clone();
   new_cmp->set_req(1, incr);
   new_cmp->set_req(2, adjusted_limit);
   new_cmp = igvn->register_new_node_with_optimizer(new_cmp);
@@ -2731,7 +2715,7 @@ IdealLoopTree* CountedLoopConverter::convert() {
   // Replace the old IfNode with a new LoopEndNode
   Node* loop_end = igvn->register_new_node_with_optimizer(BaseCountedLoopEndNode::make(iff->in(0),
                                                                                   new_test,
-                                                                                  _structure.exit_test().cl_prob(),
+                                                                                  exit_test.cl_prob(),
                                                                                   iff->as_If()->_fcnt,
                                                                                   _iv_bt));
   IfNode* loop_end_exit = loop_end->as_If();
@@ -2781,7 +2765,7 @@ IdealLoopTree* CountedLoopConverter::convert() {
   if (strip_mine_loop) {
     outer_ilt = _phase->create_outer_strip_mined_loop(init_control,
                                                       _loop,
-                                                      _structure.exit_test().cl_prob(),
+                                                      exit_test.cl_prob(),
                                                       loop_end_exit->_fcnt,
                                                       entry_control,
                                                       iffalse);
