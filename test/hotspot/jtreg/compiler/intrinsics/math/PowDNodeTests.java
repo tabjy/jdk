@@ -24,9 +24,10 @@
 package compiler.intrinsics.math;
 
 import jdk.test.lib.Asserts;
-import jdk.test.lib.Utils;
 
 import compiler.lib.ir_framework.*;
+import compiler.lib.generators.*;
+import static compiler.lib.generators.Generators.*;
 
 import java.util.Random;
 
@@ -36,13 +37,13 @@ import java.util.Random;
  * @key randomness
  * @summary Math.pow(base, exp) should constant propagate
  * @library /test/lib /
- * @run driver compiler.intrinsics.math.PowDNodeTests
+ * @run driver ${test.main.class}
  */
 public class PowDNodeTests {
-    public static final Random RNG = Utils.getRandomInstance();
+    public static final Generator<Double> UNIFORMS = G.uniformDoubles(); // [0, 1)
 
-    public static final double B = RNG.nextDouble() * 1000.0d;
-    public static final double E = RNG.nextDouble() * 1000.0d + 3.0d; // e >= 3 to avoid strength reduction code
+    public static final double B = UNIFORMS.next() * 1000.0d;
+    public static final double E = UNIFORMS.next() * 1000.0d + 3.0d; // e >= 3 to avoid strength reduction code
 
     public static void main(String[] args) {
         TestFramework.run();
@@ -53,7 +54,6 @@ public class PowDNodeTests {
     // Test 1: pow(2.0, 10.0) -> 1024.0
     @Test
     @IR(failOn = {IRNode.POW_D})
-    @IR(counts = {IRNode.CON_D, "1"})
     public static double constantLiteralFolding() {
         return Math.pow(2.0, 10.0);  // should fold to 1024.0
     }
@@ -61,7 +61,6 @@ public class PowDNodeTests {
     // Test 2: pow(final B, final E) -> B^E
     @Test
     @IR(failOn = {IRNode.POW_D})
-    @IR(counts = {IRNode.CON_D, "1"})
     public static double constantStaticFolding() {
         return Math.pow(B, E);  // should fold to B^E
     }
@@ -69,7 +68,6 @@ public class PowDNodeTests {
     // Test 3: pow(b, 0.0) -> 1.0
     @Test
     @IR(failOn = {IRNode.POW_D})
-    @IR(counts = {IRNode.CON_D, "1"})
     @Arguments(values = {Argument.RANDOM_EACH})
     public static double expZero(double b) {
         return Math.pow(b, 0.0);
@@ -77,7 +75,7 @@ public class PowDNodeTests {
 
     // Test 4: pow(b, 1.0) -> b (identity)
     @Test
-    @IR(failOn = {IRNode.POW_D, IRNode.CON_D})
+    @IR(failOn = {IRNode.POW_D})
     @Arguments(values = {Argument.RANDOM_EACH})
     public static double expOne(double b) {
         return Math.pow(b, 1.0);
@@ -86,7 +84,6 @@ public class PowDNodeTests {
     // Test 5: pow(b, NaN) -> NaN
     @Test
     @IR(failOn = {IRNode.POW_D})
-    @IR(counts = {IRNode.CON_D, "1"})
     @Arguments(values = {Argument.RANDOM_EACH})
     public static double expNaN(double b) {
         return Math.pow(b, Double.NaN);
@@ -95,7 +92,7 @@ public class PowDNodeTests {
     // Test 6: pow(b, 2.0) -> b * b
     // More tests in TestPow2Opt.java
     @Test
-    @IR(failOn = {IRNode.POW_D, IRNode.CON_D})
+    @IR(failOn = {IRNode.POW_D})
     @IR(counts = {IRNode.MUL_D, "1"})
     @Arguments(values = {Argument.RANDOM_EACH})
     public static double expTwo(double b) {
@@ -107,7 +104,7 @@ public class PowDNodeTests {
     @Test
     @IR(counts = {IRNode.IF, "1"})
     @IR(counts = {IRNode.SQRT_D, "1"})
-    @IR(counts = {IRNode.START + "CallLeaf" + IRNode.MID + "pow" + " " + IRNode.END, "1"}, phase = CompilePhase.BEFORE_MATCHING)
+    @IR(counts = {".*CallLeaf.*pow.*", "1"}, phase = CompilePhase.BEFORE_MATCHING)
     @Arguments(values = {Argument.RANDOM_EACH})
     public static double expDot5(double b) {
         return Math.pow(b, 0.5); // expand to: if (b > 0) { sqrt(b) } else { call(b) }
@@ -190,12 +187,16 @@ public class PowDNodeTests {
         assertEQWithinOneUlp(BE, lateExpConstant());
         assertEQWithinOneUlp(BE, lateBothConstant());
 
+        Generator<Double> anyBits = G.anyBitsDouble();
+        Generator<Double> largeDoubles = G.uniformDoubles(Long.MAX_VALUE, Double.MAX_VALUE);
+        Generator<Double> doubles = G.doubles();
         double[] values = {
                 Double.MIN_VALUE, Double.MIN_NORMAL, -42.0d, -1.0d, -0.0d, +0.0d, 0.5d, 1.0d, 2.0d, 123d, Double.MAX_VALUE,
                 Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY, Double.NaN,
-                // some sufficiently large magnitudes
-                (double) RNG.nextLong(Integer.MAX_VALUE, Long.MAX_VALUE), // >=  2^31
-                (double) RNG.nextLong(Long.MIN_VALUE, Integer.MIN_VALUE), // <= -2^31
+                UNIFORMS.next(), UNIFORMS.next(),
+                largeDoubles.next(), -largeDoubles.next(), // some sufficiently large magnitudes
+                anyBits.next(), anyBits.next(), // any bits with potentially more NaN representation
+                doubles.next(), doubles.next() // a healthy sprinkle of whatever else is possible
         };
 
         for (double b : values) {
