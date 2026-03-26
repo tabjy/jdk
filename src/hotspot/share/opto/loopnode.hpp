@@ -1355,7 +1355,6 @@ public:
 
     bool _should_speculatively_narrow_limit;
     Node* _narrowed_cmp;
-    Node* _narrowed_incr;
     Node* _narrowed_limit;
 
   public:
@@ -1371,7 +1370,6 @@ public:
       _cl_prob(0.0f),
       _should_speculatively_narrow_limit(false),
       _narrowed_cmp(nullptr),
-      _narrowed_incr(nullptr),
       _narrowed_limit(nullptr) {}
 
     void build();
@@ -1388,18 +1386,44 @@ public:
     float cl_prob() const { return _cl_prob; }
 
     CmpNode* cmp() const {
-      return _should_speculatively_narrow_limit ? _narrowed_cmp->isa_Cmp() : _cmp->isa_Cmp();
-    }
-    Node* incr() const {
-      return _should_speculatively_narrow_limit ? _narrowed_incr : _incr;
-    }
-    Node* limit() const {
-      return _should_speculatively_narrow_limit ? _narrowed_limit : _limit;
+      if (_should_speculatively_narrow_limit) {
+        assert(_narrowed_cmp != nullptr, "must call speculatively_narrow_limit() first");
+        return _narrowed_cmp->as_Cmp();
+      }
+      return _cmp->as_Cmp();
     }
 
-    bool can_speculatively_narrow_limit(PhaseIterGVN& igvn);
-    Node* speculatively_narrow_limit(PhaseIterGVN& igvn) const;
+    Node* incr() const {
+      if (_should_speculatively_narrow_limit) {
+        assert(_incr->Opcode() == Op_ConvI2L, "");
+        return _incr->in(1);
+      }
+      return _incr;
+    }
+
+    Node* raw_limit() const { return _limit; }
+    Node* limit() const {
+      if (_should_speculatively_narrow_limit) {
+        assert(_narrowed_limit != nullptr, "must call speculatively_narrow_limit() first");
+        return _narrowed_limit;
+      }
+      return _limit;
+    }
+    const TypeInteger* limit_t(PhaseIterGVN& igvn) const {
+      if (_should_speculatively_narrow_limit) {
+        return TypeLong::INT->filter(igvn.type(_limit)->is_long())->is_long();
+      }
+      return igvn.type(_limit)->is_int();
+    }
+
+    bool can_speculatively_narrow_limit() {
+      assert(!is_valid_with_bt(T_INT), "must not be a valid int loop");
+      // pattern must be: (long) i < some_long (with any comparison operator)
+      _should_speculatively_narrow_limit = is_valid_with_bt(T_LONG) && _incr->Opcode() == Op_ConvI2L;
+      return _should_speculatively_narrow_limit;
+    }
     bool should_speculatively_narrow_limit() const { return _should_speculatively_narrow_limit; }
+    Node* speculatively_narrow_limit(PhaseIterGVN& igvn);
   };
 
   class LoopIVIncr {
