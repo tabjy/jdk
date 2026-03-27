@@ -1409,11 +1409,11 @@ public:
       }
       return _limit;
     }
-    const TypeInteger* limit_t(PhaseIterGVN& igvn) const {
+    const TypeInteger* limit_t(PhaseIterGVN& igvn, BasicType bt) const {
       if (_should_speculatively_narrow_limit) {
         return TypeLong::INT->filter(igvn.type(_limit)->is_long())->is_long();
       }
-      return igvn.type(_limit)->is_int();
+      return igvn.type(_limit)->is_integer(bt);
     }
 
     bool can_speculatively_narrow_limit() {

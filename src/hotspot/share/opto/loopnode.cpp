@@ -2361,7 +2361,7 @@ bool CountedLoopConverter::is_counted_loop() {
   //            there is no overflow of the iv phi after the first iteration. In this case, we don't need to check (ii)
   //            again and can skip the predicate.
 
-  const TypeInteger* limit_t = _structure.exit_test().limit_t(*igvn);
+  const TypeInteger* limit_t = _structure.exit_test().limit_t(*igvn, _iv_bt);
   Node* raw_limit = _structure.exit_test().raw_limit();
   StrideOverflowState stride_overflow_state = check_stride_overflow(_structure.final_limit_correction(), limit_t, _iv_bt);
 
@@ -2496,7 +2496,7 @@ bool CountedLoopConverter::LoopStructure::is_infinite_loop() const {
 
     PhaseIterGVN& igvn = _phase->igvn();
     const TypeInteger* incr_t = igvn.type(_iv_incr.incr())->is_integer(_iv_bt);
-    const TypeInteger* limit_t = _exit_test.limit_t(igvn);
+    const TypeInteger* limit_t = _exit_test.limit_t(igvn, _iv_bt);
     if (limit_t->hi_as_long() > incr_t->hi_as_long()) {
       // if the limit can have a higher value than the increment (before the phi)
       return true;
