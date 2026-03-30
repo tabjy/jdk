@@ -1813,8 +1813,8 @@ Node* PhaseIdealLoop::LoopExitTest::speculatively_narrow_limit(PhaseIterGVN& igv
 
   // back_control[0] -> iff[1] -> bool[1] -> cmp
   Node* bol = _back_control->in(0)->in(1);
-  igvn.rehash_node_delayed(bol);
-  bol->replace_edge(_cmp, _narrowed_cmp, &igvn);
+  igvn.replace_input_of(bol, 1, _narrowed_cmp);
+
 
   assert(_loop->is_invariant(_narrowed_limit), "limit must be a loop invariant");
 

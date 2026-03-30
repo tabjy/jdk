@@ -1353,6 +1353,9 @@ public:
     BoolTest::mask _mask;
     float _cl_prob;
 
+    // True when the exit test is "(long) int_iv < long_limit" (or similar): we may treat it as an int counted loop
+    // by rewriting the comparision to int (see ::speculatively_narrow_limit()). Until then, _cmp/_limit describe the
+    // graph. After narrowing, _narrowed_cmp/_narrowed_limit hold the new CmpI and ConvL2I(limit).
     bool _should_speculatively_narrow_limit;
     Node* _narrowed_cmp;
     Node* _narrowed_limit;
@@ -1401,7 +1404,12 @@ public:
       return _incr;
     }
 
+    // The original long limit from the parsed CmpL (second operand after canonicalization). Use this to get the
+    // dominance, ctrl nodes and/or predicates that must refer to the same node as in the original graph before
+    // narrowing.
     Node* raw_limit() const { return _limit; }
+
+    // Limit used for counted-loop math: after speculative narrowing, ConvL2I(_limit); otherwise _limit (same as raw).
     Node* limit() const {
       if (_should_speculatively_narrow_limit) {
         assert(_narrowed_limit != nullptr, "must call speculatively_narrow_limit() first");
