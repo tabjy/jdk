@@ -3224,7 +3224,7 @@ void CountedLoopConverter::TruncatedIncrement::build(Node* expr) {
     }
   }
 
-  // If (maybe after  stripping) it is an AddI, we won:
+  // If (maybe after stripping) it is an AddI, we won:
   if (n1op == Op_Add(_bt)) {
     _incr = n1;
     _outer_trunc = t1;
